@@ -12,6 +12,13 @@ build/
 public/assets/
 android/app/build/
 
+# Tooling caches / temp
+.vite/
+.wrangler/
+worker/.wrangler/
+worker/.dev.vars
+*.sqlite
+
 # Editor / OS
 .DS_Store
 .history/
