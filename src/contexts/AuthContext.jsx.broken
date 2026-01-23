@@ -1,0 +1,293 @@
+import React, { createContext, useContext, useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { useToast } from '@/components/ui/use-toast'
+import { supabase } from '@/lib/supabaseClient'
+
+const AuthContext = createContext()
+
+export const useAuth = () => useContext(AuthContext)
+
+export const AuthProvider = ({ children }) => {
+  const [user, setUser] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [followedProfessionals, setFollowedProfessionals] = useState([])
+  const navigate = useNavigate()
+  const { toast } = useToast()
+
+  useEffect(() => {
+    // Check active session on mount
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      const sessionUser = session?.user ?? null
+      if (sessionUser) {
+        try {
+          // Buscar perfil usando user_id (não id)
+          const { data: profileData } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('user_id', sessionUser.id)
+            .single()
+          
+          setUser({ ...sessionUser, profile: profileData })
+        } catch (err) {
+          // Se não encontrou perfil, ainda seta o usuário da sessão
+          console.log('Perfil não encontrado ou erro:', err)
+          setUser(sessionUser)
+        }
+      } else {
+        setUser(null)
+      }
+      setLoading(false)
+    })
+
+    // Listen for auth state changes
+    const { data: authListener } = supabase.auth.onAuthStateChange(
+      async (_event, session) => {
+        const sessionUser = session?.user ?? null
+        if (_event === 'SIGNED_IN') {
+          let userWithProfile = sessionUser
+          try {
+            // Buscar perfil usando user_id
+            const { data: profileData } = await supabase
+              .from('profiles')
+              .select('*')
+              .eq('user_id', sessionUser.id)
+              .single()
+            
+            userWithProfile = { ...sessionUser, profile: profileData }
+          } catch (err) {
+            console.log('Perfil não encontrado no login:', err)
+          }
+          setUser(userWithProfile)
+          toast({
+            title: 'Login realizado com sucesso!',
+            description: 'Bem-vindo de volta ao JOBY.',
+          })
+          navigate('/')
+        }
+        if (_event === 'SIGNED_OUT') {
+          setUser(null)
+          toast({
+            title: 'Logout realizado',
+            description: 'Você saiu da sua conta.',
+          })
+          navigate('/login')
+        }
+      }
+    )
+
+    // Load followed professionals from localStorage
+    const storedFollowed = localStorage.getItem('joby_followed_professionals')
+    if (storedFollowed) {
+      setFollowedProfessionals(JSON.parse(storedFollowed))
+    }
+
+    return () => {
+      if (
+        authListener &&
+        typeof authListener.subscription?.unsubscribe === 'function'
+      ) {
+        authListener.subscription.unsubscribe()
+      }
+    }
+  }, [navigate, toast])
+
+  const login = async (email, password) => {
+    setLoading(true)
+    const { error, data } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    })
+    setLoading(false)
+    if (error) {
+      toast({
+        variant: 'destructive',
+        title: 'Erro no login',
+        description: error.message,
+      })
+      return false
+    } usando user_id
+      const userFromSession = data.session.user
+      try {
+        const { data: profileData } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('user_id', userFromSession.id)
+          .single()
+        
+        setUser({ ...userFromSession, profile: profileData })
+      } catch (err) {
+        // If no profile found, set session user only
+        console.log('Perfil não encontrado no login:', err)})
+      } catch (err) {
+        // If no profile found, set session user only
+        setUser(userFromSession)
+      }
+
+      navigate('/')
+      toast({
+        title: 'Login realizado com sucesso!',
+        description: 'Bem-vindo de volta ao JOBY.',
+      })
+    }
+    return true
+  }
+
+  // Accepts name and profession now
+  const register = async (name, email, password, profession) => {
+    setLoading(true)
+    try {
+      // Sign up and set user metadata
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: { name, profession },
+        },
+      })
+
+      if (error) {
+        console.error('Supabase signUp error:', error)
+        toast({
+          variant: 'destructive',
+          title: 'Erro no registro',
+          description: error.message || 'Erro ao cadastrar. Tente novamente.',
+        })
+        setLoading(false)
+        return { success: false, message: error.message }
+      }Criar perfil no banco usando user_id
+      const createdUser = data?.user
+      if (createdUser) {
+        try {
+          await supabase.from('profiles').insert({
+            user_id: createdUser.id,
+            nome: name,
+            categoria_profissional: profession,
+            bio: '',
+            foto_url: '',
+            idade: null,
+            verificado: false,
+          })
+        } catch (err) {
+          // Se já existe, não é problema
+          console.warn('Erro ao criar perfil no registro
+          // ignore - we'll still prompt user to check email
+          console.warn('Failed to upsert profile after register:', err)
+        }
+      }
+
+      toast({
+        title: 'Conta criada com sucesso!',
+        description:
+          'Bem-vindo ao JOBY. Verifique seu email para confirmar a conta.',
+      })
+      setLoading(false)
+      return { success: true }
+    } catch (err) {
+      console.error('Unexpected error during register:', err)
+      const rawMsg = err?.message || String(err || '')
+      const isNetwork =
+        err?.status === 0 ||
+        err?.code === 'ECONNREFUSED' ||
+        err?.code === 'ENOTFOUND' ||
+        /Failed to fetch|ENOTFOUND|ERR_NAME_NOT_RESOLVED|NetworkError/i.test(
+          rawMsg
+        )
+      const friendlyMsg = isNetwork
+        ? 'Não foi possível conectar ao servidor. Verifique sua internet, DNS ou bloqueios locais (VPN/Firewall).'
+        : rawMsg
+      toast({
+        variant: 'destructive',
+        title: isNetwork ? 'Erro de conexão' : 'Erro no registro',
+        description: friendlyMsg,
+      })
+      setLoading(false)
+      return { success: false, message: rawMsg }
+    }
+  }
+
+  const logout = async () => {
+    setLoading(true)
+    const { error } = await supabase.auth.signOut()
+    if (error) {
+      toast({
+        variant: 'destructive',
+        title: 'Erro no logout',
+        description: error.message,
+      })
+    }
+    setLoading(false)
+  }
+
+  const followProfessional = (professionalId) => {
+    if (!followedProfessionals.includes(professionalId)) {
+      const newFollowed = [...followedProfessionals, professionalId]
+      setFollowedProfessionals(newFollowed)
+      localStorage.setItem(
+        'joby_followed_professionals',
+        JSON.stringify(newFollowed)
+      )
+    }
+  }
+
+  const unfollowProfessional = (professionalId) => {
+    const newFollowed = followedProfessionals.filter(
+      (id) => id !== professionalId
+    )
+    setFollowedProfessionals(newFollowed)
+    localStorage.setItem(
+      'joby_followed_professionals',
+      JSON.stringify(newFollowed)
+    )
+  }
+
+  const isFollowing = (professionalId) => {
+    
+    // Atualizar perfil na tabela profiles usando user_id
+    try {
+      const { data: updatedProfile, error } = await supabase
+        .from('profiles')
+        .update({
+          nome: updatedUserData.nome || updatedUserData.name,
+          bio: updatedUserData.bio,
+          foto_url: updatedUserData.foto_url || updatedUserData.avatar,
+          idade: updatedUserData.idade || updatedUserData.age,
+          categoria_profissional: updatedUserData.categoria_profissional || updatedUserData.profession,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('user_id', user.id)
+        .select()
+        .single()
+
+      if (error) throw error
+
+      // Atualizar estado do usuário com o perfil atualizado
+      const newUserData = { ...user, profile: updatedProfile }
+      setUser(newUserData)
+      
+      return newUserData
+    } catch (err) {
+      console.error('Erro ao atualizar perfil:', err)
+      throw err
+    }
+    }
+
+    setUser(newUserData)
+    localStorage.setItem('joby_user', JSON.stringify(newUserData))
+    return newUserData
+  }
+
+  const value = {
+    user,
+    loading,
+    login,
+    register,
+    logout,
+    isAuthenticated: !!user,
+    followProfessional,
+    unfollowProfessional,
+    isFollowing,
+    updateUser,
+  }
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
+}

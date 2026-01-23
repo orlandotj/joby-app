@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Gerar Ícone Joby</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 20px;
+        font-family: Arial, sans-serif;
+        background: #f0f0f0;
+      }
+      .container {
+        max-width: 600px;
+        margin: 0 auto;
+        background: white;
+        padding: 30px;
+        border-radius: 10px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+      }
+      canvas {
+        border: 2px solid #ddd;
+        border-radius: 10px;
+        margin: 20px 0;
+        display: block;
+      }
+      button {
+        background: linear-gradient(135deg, #ff6b35 0%, #f7931e 100%);
+        color: white;
+        border: none;
+        padding: 15px 30px;
+        font-size: 16px;
+        border-radius: 8px;
+        cursor: pointer;
+        font-weight: bold;
+        margin: 10px 5px;
+      }
+      button:hover {
+        opacity: 0.9;
+      }
+      h1 {
+        color: #333;
+        margin-top: 0;
+      }
+      .info {
+        background: #fff3cd;
+        padding: 15px;
+        border-radius: 5px;
+        margin: 15px 0;
+        border-left: 4px solid #ffc107;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>🎨 Gerador de Ícone Joby</h1>
+      <div class="info">
+        <strong>Instruções:</strong><br />
+        1. Clique em "Gerar Ícone 512x512"<br />
+        2. Clique com botão direito na imagem<br />
+        3. Salve como "joby-icon.png"<br />
+        4. Coloque em src/assets/<br />
+      </div>
+
+      <button onclick="generateIcon(512)">Gerar Ícone 512x512</button>
+      <button onclick="generateIcon(1024)">Gerar Ícone 1024x1024</button>
+
+      <canvas id="canvas"></canvas>
+    </div>
+
+    <script>
+      function generateIcon(size) {
+        const canvas = document.getElementById('canvas')
+        const ctx = canvas.getContext('2d')
+
+        canvas.width = size
+        canvas.height = size
+
+        // Fundo gradiente laranja para roxo
+        const gradient = ctx.createRadialGradient(
+          size / 2,
+          size / 2,
+          0,
+          size / 2,
+          size / 2,
+          size / 2
+        )
+        gradient.addColorStop(0, '#ff9a56')
+        gradient.addColorStop(0.5, '#ff6b6b')
+        gradient.addColorStop(1, '#6b5b95')
+        ctx.fillStyle = gradient
+
+        // Círculo de fundo
+        ctx.beginPath()
+        ctx.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2)
+        ctx.fill()
+
+        // Desenhar ícone de maleta (briefcase) branco
+        ctx.fillStyle = 'white'
+        ctx.strokeStyle = 'white'
+        ctx.lineWidth = size * 0.03
+        ctx.lineCap = 'round'
+        ctx.lineJoin = 'round'
+
+        const centerX = size / 2
+        const centerY = size / 2
+        const iconSize = size * 0.4
+
+        // Corpo da maleta
+        const briefcaseWidth = iconSize
+        const briefcaseHeight = iconSize * 0.65
+        const briefcaseX = centerX - briefcaseWidth / 2
+        const briefcaseY = centerY - briefcaseHeight / 2 + iconSize * 0.1
+
+        ctx.fillRect(briefcaseX, briefcaseY, briefcaseWidth, briefcaseHeight)
+
+        // Alça da maleta
+        const handleWidth = iconSize * 0.4
+        const handleHeight = iconSize * 0.15
+        const handleX = centerX - handleWidth / 2
+        const handleY = briefcaseY - handleHeight
+
+        ctx.beginPath()
+        ctx.moveTo(handleX, handleY)
+        ctx.lineTo(handleX, briefcaseY)
+        ctx.moveTo(handleX + handleWidth, handleY)
+        ctx.lineTo(handleX + handleWidth, briefcaseY)
+        ctx.arc(centerX, handleY, handleWidth / 2, Math.PI, 0, false)
+        ctx.stroke()
+
+        // Detalhe da fechadura
+        const lockSize = size * 0.04
+        ctx.fillRect(centerX - lockSize / 2, centerY, lockSize, lockSize * 1.5)
+
+        // Converter para display
+        canvas.style.display = 'block'
+        canvas.style.margin = '20px auto'
+      }
+
+      // Gerar automaticamente ao carregar
+      window.onload = () => generateIcon(512)
+    </script>
+  </body>
+</html>

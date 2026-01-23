@@ -1,0 +1,631 @@
+import React, { useState, useEffect } from 'react'
+import { useParams } from 'react-router-dom'
+import { motion } from 'framer-motion'
+import ProfileHeader from '@/components/ProfileHeader'
+import VideoCard from '@/components/VideoCard'
+import { Tabs, TabsContent } from '@/components/ui/tabs'
+import { Card, CardContent } from '@/components/ui/card'
+import {
+  Star,
+  Briefcase,
+  UploadCloud,
+  PlayCircle,
+  MessageSquare as MessageSquareText,
+  Image as ImageIcon,
+  Video as VideoIcon,
+} from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { useAuth } from '@/contexts/AuthContext'
+import AddContentFab from '@/components/AddContentFab'
+import UploadDialog from '@/components/UploadDialog'
+import ServiceForm from '@/components/ServiceForm'
+import ServiceDetailsModal from '@/components/ServiceDetailsModal'
+
+const Profile = () => {
+  const { id: profileId } = useParams() // Renamed to avoid conflict with item id
+  const { user: currentUser } = useAuth()
+  const [user, setUser] = useState(null)
+  const [videos, setVideos] = useState([])
+  const [photos, setPhotos] = useState([]) // Added state for photos
+  const [reviews, setReviews] = useState([])
+  const [services, setServices] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [activeTab, setActiveTab] = useState('videos')
+  const [isUploadDialogOpen, setIsUploadDialogOpen] = useState(false)
+  const [uploadType, setUploadType] = useState('') // 'photo', 'short-video', 'long-video'
+  const [isServiceFormOpen, setIsServiceFormOpen] = useState(false)
+  const [isServiceDetailsOpen, setIsServiceDetailsOpen] = useState(false)
+  const [selectedService, setSelectedService] = useState(null)
+  const [editingService, setEditingService] = useState(null)
+
+  const isOwnProfile = currentUser?.id === profileId
+
+  useEffect(() => {
+    setLoading(true)
+    setTimeout(() => {
+      const mockUser = {
+        id: profileId,
+        name: isOwnProfile
+          ? currentUser?.name || 'Meu Perfil'
+          : 'Maria Oliveira',
+        profession: isOwnProfile
+          ? currentUser?.profession || 'Minha Profissão'
+          : 'Pintora',
+        avatar: isOwnProfile
+          ? currentUser?.avatar
+          : 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d',
+        coverImage: isOwnProfile
+          ? currentUser?.coverImage
+          : 'https://images.unsplash.com/photo-1542856302-b4089b449a86',
+        bio: isOwnProfile
+          ? currentUser?.bio ||
+            'Edite sua bio para contar mais sobre você e seus serviços.'
+          : 'Profissional dedicada com anos de experiência, focada em entregar resultados de alta qualidade e satisfação do cliente.',
+        location: 'São Paulo, SP',
+        rating: 4.8,
+        reviews: 124,
+        memberSince: 'Jan 2022',
+        averagePrice: 120,
+        priceUnit: 'hora',
+      }
+
+      const commonUserForContent = {
+        id: mockUser.id,
+        name: mockUser.name,
+        profession: mockUser.profession,
+        avatar: mockUser.avatar,
+      }
+
+      const mockVideosData = [
+        {
+          id: 'vid1_user',
+          url: 'https://assets.mixkit.co/videos/preview/mixkit-man-working-on-electrical-installation-5999-large.mp4',
+          thumbnail:
+            'https://images.unsplash.com/photo-1581092915894-fd967828827d?ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxzZWFyY2h8Mnx8ZWxlY3RyaWNpYW58ZW58MHx8MHx8fDA%3D&auto=format&fit=crop&w=300&q=20',
+          title: 'Instalação Segura de Tomada',
+          description:
+            'Passo a passo para uma instalação elétrica segura e eficiente.',
+          views: 1250,
+          comments: 32,
+          price: 120,
+          priceUnit: 'hora',
+          user: commonUserForContent,
+          type: 'short',
+        },
+        {
+          id: 'vid2_user',
+          url: 'https://assets.mixkit.co/videos/preview/mixkit-electrician-working-on-an-electrical-panel-5999-large.mp4',
+          thumbnail:
+            'https://images.unsplash.com/photo-1621905252507-b35492cc74b4?ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxzZWFyY2h8NXx8ZWxlY3RyaWNpYW58ZW58MHx8MHx8fDA%3D&auto=format&fit=crop&w=300&q=20',
+          title: 'Tutorial: Quadro de Distribuição',
+          description:
+            'Entenda como funciona e a importância da manutenção do quadro elétrico.',
+          views: 980,
+          comments: 24,
+          price: 150,
+          priceUnit: 'serviço',
+          user: commonUserForContent,
+          type: 'long',
+        },
+      ]
+
+      const mockPhotosData = [
+        {
+          id: 'photo1',
+          url: 'https://images.unsplash.com/photo-1581578731548-c64695cc6952?ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxzZWFyY2h8M3x8ZWxlY3RyaWNpYW58ZW58MHx8MHx8fDA%3D&auto=format&fit=crop&w=400&q=60',
+          title: 'Serviço de fiação concluído',
+          description: 'Nova fiação para cozinha industrial.',
+          views: 300,
+          comments: 12,
+        },
+        {
+          id: 'photo2',
+          url: 'https://images.unsplash.com/photo-1600880292210-fdb485004ded?ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxzZWFyY2h8OHx8ZWxlY3RyaWNpYW58ZW58MHx8MHx8fDA%3D&auto=format&fit=crop&w=400&q=60',
+          title: 'Painel Organizado',
+          description: 'Organização de painel elétrico residencial.',
+          views: 450,
+          comments: 20,
+        },
+      ]
+
+      const mockReviewsData = [
+        {
+          id: 'rev1',
+          author: 'Ana Costa',
+          rating: 5,
+          date: '15/04/2023',
+          comment:
+            'Serviço impecável e profissional muito atencioso. Recomendo fortemente!',
+        },
+        {
+          id: 'rev2',
+          author: 'Lucas Mendes',
+          rating: 4,
+          date: '22/03/2023',
+          comment:
+            'Bom trabalho, resolveu meu problema rapidamente. Preço justo.',
+        },
+      ]
+
+      const mockServicesData = [
+        // Serviço com horários fixos e todas as taxas
+        {
+          id: 'serv1',
+          title: 'Instalação Elétrica Completa',
+          price: 500,
+          unit: 'projeto',
+          priceUnit: 'projeto',
+          description:
+            'Serviço completo de instalação elétrica residencial ou comercial com garantia de qualidade e materiais inclusos.',
+          workArea: 'Grande São Paulo',
+          duration: '1-3 dias',
+          homeService: true,
+          emergencyService: false,
+          travelService: true,
+          overtimeService: false,
+          availableHours: ['Seg-Sex 8h-18h', 'Sáb 8h-12h'],
+          homeServiceFee: '30',
+          emergencyServiceFee: '',
+          travelFee: '10',
+          overtimeFee: '',
+        },
+        // Serviço 24h com emergência e horários em aberto
+        {
+          id: 'serv2',
+          title: 'Reparos Elétricos Urgentes',
+          price: 180,
+          unit: 'chamado',
+          priceUnit: 'hora',
+          description:
+            'Atendimento rápido para emergências elétricas 24h. Disponível para chamados urgentes.',
+          workArea: 'Zona Sul e Centro',
+          duration: '30 minutos a 2 horas',
+          homeService: true,
+          emergencyService: true,
+          travelService: true,
+          overtimeService: true,
+          availableHours: [], // Horários em aberto para cliente escolher
+          homeServiceFee: '20',
+          emergencyServiceFee: '50',
+          travelFee: '15',
+          overtimeFee: '40',
+        },
+        // Serviço por hora com horários específicos
+        {
+          id: 'serv3',
+          title: 'Ajudante de Pedreiro',
+          price: 25,
+          unit: 'hora',
+          priceUnit: 'hora',
+          description:
+            'Profissional experiente para auxiliar em obras e reformas. Pontual e dedicado.',
+          workArea: 'Zona Leste - São Paulo',
+          duration: 'Flexível',
+          homeService: true,
+          emergencyService: false,
+          travelService: false,
+          overtimeService: true,
+          availableHours: ['Seg-Sex 7h-17h'],
+          homeServiceFee: '15',
+          emergencyServiceFee: '',
+          travelFee: '',
+          overtimeFee: '50',
+        },
+        // Serviço mensal sem taxas extras
+        {
+          id: 'serv4',
+          title: 'Cabeleireiro a Domicílio',
+          price: 80,
+          unit: 'serviço',
+          priceUnit: 'serviço',
+          description:
+            'Corte, escova, coloração e hidratação. Atendo no conforto da sua casa com todos os materiais profissionais.',
+          workArea: 'Zona Oeste - Pinheiros, Butantã',
+          duration: '1-2 horas',
+          homeService: true,
+          emergencyService: false,
+          travelService: true,
+          overtimeService: false,
+          availableHours: [], // Cliente escolhe quando precisa
+          homeServiceFee: '25',
+          emergencyServiceFee: '',
+          travelFee: '20',
+          overtimeFee: '',
+        },
+        // Serviço por projeto com horários flexíveis
+        {
+          id: 'serv5',
+          title: 'Consultoria de TI',
+          price: 1200,
+          unit: 'projeto',
+          priceUnit: 'projeto',
+          description:
+            'Análise de sistemas, otimização de processos e implementação de soluções tecnológicas personalizadas.',
+          workArea: 'Todo Brasil (remoto ou presencial)',
+          duration: '1-2 semanas',
+          homeService: true,
+          emergencyService: false,
+          travelService: true,
+          overtimeService: true,
+          availableHours: [], // Horários flexíveis - cliente define
+          homeServiceFee: '0',
+          emergencyServiceFee: '',
+          travelFee: '10',
+          overtimeFee: '30',
+        },
+        // Serviço por diária
+        {
+          id: 'serv6',
+          title: 'Faxina Completa',
+          price: 150,
+          unit: 'diária',
+          priceUnit: 'diária',
+          description:
+            'Limpeza profunda de residências e escritórios. Inclui organização, limpeza de vidros e áreas externas.',
+          workArea: 'Região Central de São Paulo',
+          duration: '6-8 horas',
+          homeService: true,
+          emergencyService: false,
+          travelService: false,
+          overtimeService: false,
+          availableHours: ['Ter-Sáb 8h-16h', 'Domingo sob consulta'],
+          homeServiceFee: '0',
+          emergencyServiceFee: '',
+          travelFee: '',
+          overtimeFee: '',
+        },
+        // Serviço por m² com horários em aberto
+        {
+          id: 'serv7',
+          title: 'Pintura Residencial',
+          price: 35,
+          unit: 'quantidade',
+          priceUnit: 'm²',
+          description:
+            'Pintura de alta qualidade com preparação completa das paredes. Tinta acrílica premium inclusa.',
+          workArea: 'ABC Paulista',
+          duration: '',
+          homeService: true,
+          emergencyService: false,
+          travelService: true,
+          overtimeService: false,
+          availableHours: [], // Agenda conforme disponibilidade do cliente
+          homeServiceFee: '0',
+          emergencyServiceFee: '',
+          travelFee: '5',
+          overtimeFee: '',
+        },
+      ]
+
+      setUser(mockUser)
+      setVideos(mockVideosData)
+      setPhotos(mockPhotosData)
+      setReviews(mockReviewsData)
+      setServices(mockServicesData)
+      setLoading(false)
+    }, 700)
+  }, [profileId, currentUser, isOwnProfile])
+
+  const handleOpenUploadDialog = (type) => {
+    setUploadType(type)
+    setIsUploadDialogOpen(true)
+  }
+
+  const handleContentUploaded = (newContent) => {
+    // This is where you would update state after successful upload
+    // For now, just logging and closing.
+    console.log('New content uploaded:', newContent)
+    // if (newContent.type.startsWith('video')) {
+    //   setVideos(prev => [newContent, ...prev]);
+    // } else if (newContent.type === 'photo') {
+    //   setPhotos(prev => [newContent, ...prev]);
+    // }
+    setIsUploadDialogOpen(false)
+  }
+
+  const handleOpenServiceForm = (service = null) => {
+    setEditingService(service)
+    setIsServiceFormOpen(true)
+  }
+
+  const handleSaveService = (serviceData) => {
+    if (editingService) {
+      setServices((prev) =>
+        prev.map((s) => (s.id === serviceData.id ? serviceData : s))
+      )
+    } else {
+      setServices((prev) => [serviceData, ...prev])
+    }
+    setIsServiceFormOpen(false)
+    setEditingService(null)
+  }
+
+  const handleViewServiceDetails = (service) => {
+    setSelectedService(service)
+    setIsServiceDetailsOpen(true)
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-[calc(100vh-150px)]">
+        <motion.div
+          animate={{ rotate: 360, scale: [1, 1.2, 1] }}
+          transition={{ repeat: Infinity, duration: 1.5, ease: 'linear' }}
+          className="w-12 h-12 rounded-full joby-gradient"
+        />
+      </div>
+    )
+  }
+
+  if (!user) {
+    return <div className="text-center py-10">Perfil não encontrado.</div>
+  }
+
+  const renderEmptyState = (title, message, icon, actionButton) => (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="text-center py-12 px-4"
+    >
+      {React.createElement(icon, {
+        size: 48,
+        className: 'mx-auto text-muted-foreground mb-4 opacity-70',
+      })}
+      <h3 className="text-xl font-semibold text-foreground mb-2">{title}</h3>
+      <p className="text-muted-foreground mb-6 max-w-md mx-auto">{message}</p>
+      {actionButton && actionButton}
+    </motion.div>
+  )
+
+  return (
+    <div className="pb-16 md:pb-4 relative">
+      {' '}
+      {/* Added padding bottom for FAB */}
+      <ProfileHeader
+        user={user}
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
+        isOwnProfile={isOwnProfile}
+      />
+      <Tabs
+        value={activeTab}
+        onValueChange={setActiveTab}
+        className="px-0 sm:px-2 md:px-0 mt-1"
+      >
+        <TabsContent
+          value="videos"
+          forceMount={true}
+          hidden={activeTab !== 'videos'}
+        >
+          {videos.length > 0 ? (
+            <div className="space-y-4 pt-4">
+              {videos.map((video) => (
+                <VideoCard key={video.id} video={video} user={user} />
+              ))}
+            </div>
+          ) : isOwnProfile ? (
+            renderEmptyState(
+              'Mostre seu Talento em Vídeo!',
+              "Você ainda não postou vídeos. Clique no '+' para adicionar seu primeiro vídeo e atrair mais clientes!",
+              PlayCircle,
+              <Button onClick={() => handleOpenUploadDialog('short-video')}>
+                <UploadCloud size={18} className="mr-2" />
+                Adicionar Vídeo
+              </Button>
+            )
+          ) : (
+            renderEmptyState(
+              'Sem Vídeos Ainda',
+              `${user.name} ainda não compartilhou vídeos.`,
+              PlayCircle
+            )
+          )}
+        </TabsContent>
+
+        <TabsContent
+          value="photos"
+          forceMount={true}
+          hidden={activeTab !== 'photos'}
+        >
+          {photos.length > 0 ? (
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-1 sm:gap-2 pt-4">
+              {photos.map((photo) => (
+                <motion.div
+                  key={photo.id}
+                  initial={{ opacity: 0, scale: 0.9 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  transition={{ duration: 0.3 }}
+                  className="aspect-square bg-muted rounded-md overflow-hidden relative group"
+                >
+                  <img
+                    src={photo.url}
+                    alt={photo.title || 'Foto do portfólio'}
+                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                    src="https://images.unsplash.com/photo-1633362967859-fde6c856274d"
+                  />
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/70 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-2">
+                    <h4 className="text-white text-xs font-semibold truncate">
+                      {photo.title}
+                    </h4>
+                    {/* <p className="text-white text-[10px] truncate">{photo.description}</p> */}
+                  </div>
+                </motion.div>
+              ))}
+            </div>
+          ) : isOwnProfile ? (
+            renderEmptyState(
+              'Exiba Suas Fotos!',
+              "Seu portfólio de fotos está vazio. Clique no '+' para adicionar imagens dos seus melhores trabalhos!",
+              ImageIcon,
+              <Button onClick={() => handleOpenUploadDialog('photo')}>
+                <UploadCloud size={18} className="mr-2" />
+                Adicionar Foto
+              </Button>
+            )
+          ) : (
+            renderEmptyState(
+              'Sem Fotos Ainda',
+              `${user.name} ainda não adicionou fotos ao portfólio.`,
+              ImageIcon
+            )
+          )}
+        </TabsContent>
+
+        <TabsContent
+          value="services"
+          forceMount={true}
+          hidden={activeTab !== 'services'}
+        >
+          {services.length > 0 ? (
+            <div className="space-y-3 pt-4">
+              {services.map((service) => (
+                <motion.div
+                  key={service.id}
+                  initial={{ opacity: 0, y: 15 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.3 }}
+                >
+                  <Card className="shadow-sm hover:shadow-md transition-shadow">
+                    <CardContent className="p-4">
+                      <div className="flex justify-between items-start mb-1.5">
+                        <h3 className="font-semibold text-foreground text-base">
+                          {service.title}
+                        </h3>
+                        <div className="text-primary font-bold text-base">
+                          R$ {service.price}/{service.unit}
+                        </div>
+                      </div>
+                      <p className="text-sm text-muted-foreground mb-3">
+                        {service.description}
+                      </p>
+                      <div className="flex gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="flex-1"
+                          onClick={() => handleViewServiceDetails(service)}
+                        >
+                          Ver Detalhes
+                        </Button>
+                        {isOwnProfile && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => handleOpenServiceForm(service)}
+                          >
+                            Editar
+                          </Button>
+                        )}
+                      </div>
+                    </CardContent>
+                  </Card>
+                </motion.div>
+              ))}
+            </div>
+          ) : isOwnProfile ? (
+            renderEmptyState(
+              'Cadastre Seus Serviços',
+              'Ainda não há serviços cadastrados. Adicione seus serviços para que os clientes saibam o que você oferece.',
+              Briefcase,
+              <Button onClick={() => handleOpenServiceForm()}>
+                <Briefcase size={18} className="mr-2" />
+                Adicionar Serviço
+              </Button>
+            )
+          ) : (
+            renderEmptyState(
+              'Serviços Não Informados',
+              `${user.name} ainda não listou os serviços oferecidos.`,
+              Briefcase
+            )
+          )}
+        </TabsContent>
+
+        <TabsContent
+          value="reviews"
+          forceMount={true}
+          hidden={activeTab !== 'reviews'}
+        >
+          {reviews.length > 0 ? (
+            <div className="space-y-3 pt-4">
+              {reviews.map((review) => (
+                <motion.div
+                  key={review.id}
+                  initial={{ opacity: 0, y: 15 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.3 }}
+                >
+                  <Card className="shadow-sm">
+                    <CardContent className="p-4">
+                      <div className="flex justify-between items-start mb-1">
+                        <h3 className="font-medium text-foreground text-sm">
+                          {review.author}
+                        </h3>
+                        <div className="flex items-center">
+                          <div className="flex">
+                            {[...Array(5)].map((_, i) => (
+                              <Star
+                                key={i}
+                                size={14}
+                                className={
+                                  i < review.rating
+                                    ? 'fill-yellow-400 text-yellow-400'
+                                    : 'text-muted'
+                                }
+                              />
+                            ))}
+                          </div>
+                          <span className="text-xs text-muted-foreground ml-2">
+                            {review.date}
+                          </span>
+                        </div>
+                      </div>
+                      <p className="text-sm text-muted-foreground">
+                        {review.comment}
+                      </p>
+                    </CardContent>
+                  </Card>
+                </motion.div>
+              ))}
+            </div>
+          ) : (
+            renderEmptyState(
+              'Sem Avaliações Ainda',
+              `${user.name} ainda não recebeu avaliações. Seja o primeiro a contratar e avaliar!`,
+              MessageSquareText
+            )
+          )}
+        </TabsContent>
+      </Tabs>
+      {isOwnProfile && (
+        <AddContentFab onOpenUploadDialog={handleOpenUploadDialog} />
+      )}
+      <UploadDialog
+        isOpen={isUploadDialogOpen}
+        setIsOpen={setIsUploadDialogOpen}
+        uploadType={uploadType}
+        onUploadComplete={handleContentUploaded}
+      />
+      <ServiceForm
+        isOpen={isServiceFormOpen}
+        onClose={() => {
+          setIsServiceFormOpen(false)
+          setEditingService(null)
+        }}
+        onSave={handleSaveService}
+        editingService={editingService}
+      />
+      <ServiceDetailsModal
+        isOpen={isServiceDetailsOpen}
+        onClose={() => {
+          setIsServiceDetailsOpen(false)
+          setSelectedService(null)
+        }}
+        service={selectedService}
+        professional={{ ...user, isOwnProfile }}
+      />
+    </div>
+  )
+}
+
+export default Profile

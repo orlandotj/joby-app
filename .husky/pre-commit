@@ -1,0 +1,5 @@
+#!/bin/sh
+. "$(dirname "$0")/_/husky.sh"
+
+# Run secret scanner before commit
+npm run check-secrets || { echo "Pre-commit: secret scan failed. Fix issues before committing."; exit 1; }

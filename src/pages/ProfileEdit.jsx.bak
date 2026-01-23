@@ -1,0 +1,612 @@
+import React, { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { motion } from 'framer-motion'
+import { Camera, Upload, X, Plus, Edit2, Trash2, Briefcase } from 'lucide-react'
+import { useAuth } from '@/contexts/AuthContext'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { useToast } from '@/components/ui/use-toast'
+import { supabase } from '@/lib/supabaseClient'
+import ServiceForm from '@/components/ServiceForm'
+
+const professions = [
+  'Eletricista',
+  'Pintor',
+  'Encanador',
+  'Pedreiro',
+  'Jardineiro',
+  'Diarista',
+  'Cabeleireiro',
+  'Manicure',
+  'Personal Trainer',
+  'Professor Particular',
+  'Fotógrafo',
+  'Designer',
+  'Desenvolvedor',
+]
+
+const ProfileEdit = () => {
+  const { user, updateUser } = useAuth()
+  const navigate = useNavigate()
+  const { toast } = useToast()
+
+  const [formData, setFormData] = useState({
+    name: '',
+    bio: '',
+    age: '',
+    location: '',
+    profession: '',
+    areas: '',
+    avatar: null,
+    coverImage: null,
+  })
+
+  const [avatarPreview, setAvatarPreview] = useState(null)
+  const [coverPreview, setCoverPreview] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [showServiceForm, setShowServiceForm] = useState(false)
+  const [services, setServices] = useState([])
+  const [editingService, setEditingService] = useState(null)
+
+  useEffect(() => {
+    if (user) {
+      setFormData({
+        name: user.name || '',
+        bio: user.bio || '',
+        age: user.age || '',
+        location: user.location || '',
+        profession: user.profession || '',
+        areas: user.areas || '',
+      })
+      setAvatarPreview(user.avatar)
+      setCoverPreview(user.coverImage)
+      // Carregar serviços do usuário (mock por enquanto)
+      if (user.services) {
+        setServices(user.services)
+      } else {
+        // Serviços de teste
+        setServices([
+          {
+            id: 'edit_serv1',
+            title: 'Instalação Elétrica Residencial',
+            price: 450,
+            unit: 'projeto',
+            priceUnit: 'projeto',
+            description:
+              'Serviço completo de instalação elétrica com materiais inclusos e garantia.',
+            workArea: 'Grande São Paulo',
+            duration: '2-3 dias',
+            homeService: true,
+            emergencyService: false,
+            travelService: true,
+            overtimeService: false,
+            availableHours: ['Seg-Sex 8h-18h'],
+            homeServiceFee: '25',
+            emergencyServiceFee: '',
+            travelFee: '10',
+            overtimeFee: '',
+          },
+          {
+            id: 'edit_serv2',
+            title: 'Manutenção Elétrica 24h',
+            price: 150,
+            unit: 'hora',
+            priceUnit: 'hora',
+            description:
+              'Atendimento de emergência para problemas elétricos urgentes.',
+            workArea: 'Zona Sul e Centro',
+            duration: '',
+            homeService: true,
+            emergencyService: true,
+            travelService: true,
+            overtimeService: true,
+            availableHours: [],
+            homeServiceFee: '20',
+            emergencyServiceFee: '60',
+            travelFee: '15',
+            overtimeFee: '40',
+          },
+          {
+            id: 'edit_serv3',
+            title: 'Corte de Cabelo Masculino',
+            price: 50,
+            unit: 'serviço',
+            priceUnit: 'serviço',
+            description:
+              'Corte moderno e personalizado com acabamento profissional.',
+            workArea: 'Pinheiros e região',
+            duration: '45 minutos',
+            homeService: true,
+            emergencyService: false,
+            travelService: true,
+            overtimeService: false,
+            availableHours: [],
+            homeServiceFee: '30',
+            emergencyServiceFee: '',
+            travelFee: '20',
+            overtimeFee: '',
+          },
+        ])
+      }
+    }
+  }, [user])
+
+  const handleAddService = () => {
+    setEditingService(null)
+    setShowServiceForm(true)
+  }
+
+  const handleEditService = (service) => {
+    setEditingService(service)
+    setShowServiceForm(true)
+  }
+
+  const handleSaveService = (serviceData) => {
+    if (editingService) {
+      setServices((prev) =>
+        prev.map((s) => (s.id === serviceData.id ? serviceData : s))
+      )
+      toast({
+        title: 'Serviço Atualizado!',
+        description: `O serviço "${serviceData.title}" foi atualizado com sucesso.`,
+        variant: 'success',
+        duration: 3000,
+      })
+    } else {
+      setServices((prev) => [serviceData, ...prev])
+      toast({
+        title: 'Serviço Adicionado!',
+        description: `O serviço "${serviceData.title}" foi criado com sucesso.`,
+        variant: 'success',
+        duration: 3000,
+      })
+    }
+    setShowServiceForm(false)
+    setEditingService(null)
+  }
+
+  const handleDeleteService = (serviceId) => {
+    setServices((prev) => prev.filter((s) => s.id !== serviceId))
+    toast({
+      title: 'Serviço Removido',
+      description: 'O serviço foi removido com sucesso.',
+      duration: 3000,
+    })
+  }
+
+  const handleImageChange = async (e, type) => {
+    const file = e.target.files[0]
+    if (file) {
+      const reader = new FileReader()
+      reader.onloadend = () => {
+        if (type === 'avatar') {
+          setAvatarPreview(reader.result)
+          setFormData((prev) => ({ ...prev, avatar: file }))
+        } else {
+          setCoverPreview(reader.result)
+          setFormData((prev) => ({ ...prev, coverImage: file }))
+        }
+      }
+      reader.readAsDataURL(file)
+    }
+  }
+
+  const uploadImage = async (file, path) => {
+    const fileExt = file.name.split('.').pop()
+    const fileName = `${path}/${user.id}-${Date.now()}.${fileExt}`
+    const { data, error } = await supabase.storage
+      .from('profile-photos')
+      .upload(fileName, file, { upsert: true })
+    if (error) {
+      throw error
+    }
+    const { publicURL, error: urlError } = supabase.storage
+      .from('profile-photos')
+      .getPublicUrl(fileName)
+    if (urlError) {
+      throw urlError
+    }
+    return publicURL
+  }
+
+  const handleCameraCapture = async (type) => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true })
+      // Aqui você pode implementar a captura de foto da câmera
+      // Por enquanto, vamos apenas mostrar um toast
+      toast({
+        title: 'Câmera não implementada',
+        description:
+          'A captura de foto pela câmera será implementada em breve.',
+      })
+    } catch (err) {
+      toast({
+        title: 'Erro ao acessar câmera',
+        description: 'Verifique se você concedeu permissão para usar a câmera.',
+        variant: 'destructive',
+      })
+    }
+  }
+
+  const validateForm = () => {
+    if (!formData.name) {
+      toast({
+        title: 'Nome obrigatório',
+        description: 'Por favor, preencha seu nome completo.',
+        variant: 'destructive',
+      })
+      return false
+    }
+
+    if (formData.bio && formData.bio.length > 200) {
+      toast({
+        title: 'Bio muito longa',
+        description: 'A bio deve ter no máximo 200 caracteres.',
+        variant: 'destructive',
+      })
+      return false
+    }
+
+    if (formData.age && (formData.age < 16 || formData.age > 100)) {
+      toast({
+        title: 'Idade inválida',
+        description: 'Você deve ter entre 16 e 100 anos.',
+        variant: 'destructive',
+      })
+      return false
+    }
+
+    // Validar se há contatos na bio
+    const contactRegex =
+      /([0-9]{8,}|@|\.com|www\.|http|whatsapp|facebook|instagram)/i
+    if (contactRegex.test(formData.bio)) {
+      toast({
+        title: 'Informações de contato não permitidas',
+        description: 'Não inclua links, e-mails ou números de telefone na bio.',
+        variant: 'destructive',
+      })
+      return false
+    }
+
+    return true
+  }
+
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+
+    if (!validateForm()) return
+
+    setLoading(true)
+    try {
+      // Upload avatar if changed
+      let avatarUrl = user.avatar
+      if (formData.avatar instanceof File) {
+        avatarUrl = await uploadImage(formData.avatar, 'avatars')
+      }
+      // Upload cover image if changed
+      let coverUrl = user.coverImage
+      if (formData.coverImage instanceof File) {
+        coverUrl = await uploadImage(formData.coverImage, 'covers')
+      }
+
+      // Prepare data to update
+      const updatedData = {
+        ...formData,
+        avatar: avatarUrl,
+        coverImage: coverUrl,
+      }
+      delete updatedData.avatarFile
+      delete updatedData.coverFile
+
+      await updateUser(updatedData)
+
+      toast({
+        title: 'Perfil atualizado!',
+        description: 'Suas alterações foram salvas com sucesso.',
+        variant: 'success',
+      })
+
+      navigate(`/profile/${user.id}`)
+    } catch (error) {
+      toast({
+        title: 'Erro ao salvar',
+        description: 'Não foi possível salvar as alterações. Tente novamente.',
+        variant: 'destructive',
+      })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -20 }}
+      className="container max-w-2xl mx-auto p-4 py-8"
+    >
+      <form onSubmit={handleSubmit} className="space-y-8">
+        {/* Cover Image */}
+        <div className="relative h-48 rounded-xl overflow-hidden bg-accent">
+          {coverPreview ? (
+            <img
+              src={coverPreview}
+              alt="Cover"
+              className="w-full h-full object-cover"
+            />
+          ) : (
+            <div className="w-full h-full flex items-center justify-center bg-accent">
+              <Upload className="w-8 h-8 text-muted-foreground" />
+            </div>
+          )}
+          <div className="absolute top-4 right-4 flex gap-2">
+            <input
+              type="file"
+              accept="image/*"
+              onChange={(e) => handleImageChange(e, 'cover')}
+              className="hidden"
+              id="cover-upload"
+            />
+            <label
+              htmlFor="cover-upload"
+              className="bg-background/80 backdrop-blur-sm hover:bg-background/90 text-foreground p-2 rounded-full cursor-pointer"
+            >
+              <Upload className="w-5 h-5" />
+            </label>
+            <button
+              type="button"
+              onClick={() => handleCameraCapture('cover')}
+              className="bg-background/80 backdrop-blur-sm hover:bg-background/90 text-foreground p-2 rounded-full"
+            >
+              <Camera className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+
+        {/* Avatar */}
+        <div className="relative w-24 h-24 mx-auto -mt-12 rounded-full overflow-hidden border-4 border-background">
+          {avatarPreview ? (
+            <img
+              src={avatarPreview}
+              alt="Avatar"
+              className="w-full h-full object-cover"
+            />
+          ) : (
+            <div className="w-full h-full flex items-center justify-center bg-accent">
+              <Upload className="w-6 h-6 text-muted-foreground" />
+            </div>
+          )}
+          <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 hover:opacity-100 transition-opacity">
+            <input
+              type="file"
+              accept="image/*"
+              onChange={(e) => handleImageChange(e, 'avatar')}
+              className="hidden"
+              id="avatar-upload"
+            />
+            <label
+              htmlFor="avatar-upload"
+              className="p-1.5 bg-background/80 backdrop-blur-sm hover:bg-background/90 rounded-full cursor-pointer mr-2"
+            >
+              <Upload className="w-4 h-4" />
+            </label>
+            <button
+              type="button"
+              onClick={() => handleCameraCapture('avatar')}
+              className="p-1.5 bg-background/80 backdrop-blur-sm hover:bg-background/90 rounded-full"
+            >
+              <Camera className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+
+        {/* Basic Information */}
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="name">Nome completo *</Label>
+            <Input
+              id="name"
+              value={formData.name}
+              onChange={(e) =>
+                setFormData((prev) => ({ ...prev, name: e.target.value }))
+              }
+              placeholder="Seu nome completo"
+              required
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="bio">Descrição / Bio</Label>
+            <Textarea
+              id="bio"
+              value={formData.bio}
+              onChange={(e) =>
+                setFormData((prev) => ({ ...prev, bio: e.target.value }))
+              }
+              placeholder="Conte um pouco sobre você e seu trabalho (máx. 200 caracteres)"
+              maxLength={200}
+              className="resize-none"
+              rows={4}
+            />
+            <p className="text-xs text-muted-foreground text-right">
+              {formData.bio?.length || 0}/200
+            </p>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="age">Idade</Label>
+              <Input
+                id="age"
+                type="number"
+                min="16"
+                max="100"
+                value={formData.age}
+                onChange={(e) =>
+                  setFormData((prev) => ({ ...prev, age: e.target.value }))
+                }
+                placeholder="Sua idade"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="location">Localização</Label>
+              <Input
+                id="location"
+                value={formData.location}
+                onChange={(e) =>
+                  setFormData((prev) => ({ ...prev, location: e.target.value }))
+                }
+                placeholder="Cidade, Estado"
+              />
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="profession">Profissão *</Label>
+            <Select
+              value={formData.profession}
+              onValueChange={(value) =>
+                setFormData((prev) => ({ ...prev, profession: value }))
+              }
+              required
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Selecione sua profissão" />
+              </SelectTrigger>
+              <SelectContent>
+                {professions.map((profession) => (
+                  <SelectItem key={profession} value={profession}>
+                    {profession}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="areas">Áreas de atuação</Label>
+            <Input
+              id="areas"
+              value={formData.areas}
+              onChange={(e) =>
+                setFormData((prev) => ({ ...prev, areas: e.target.value }))
+              }
+              placeholder="Ex: Zona Sul, Centro, Região Metropolitana"
+            />
+          </div>
+        </div>
+
+        {/* Serviços */}
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-lg font-semibold">Serviços</h3>
+            <Button
+              type="button"
+              onClick={handleAddService}
+              className="joby-gradient text-primary-foreground"
+            >
+              <Plus className="w-4 h-4 mr-2" />
+              Adicionar Serviço
+            </Button>
+          </div>
+
+          {services.length > 0 ? (
+            <div className="space-y-3">
+              {services.map((service) => (
+                <div
+                  key={service.id}
+                  className="border border-border rounded-lg p-4 bg-muted/30"
+                >
+                  <div className="flex justify-between items-start mb-2">
+                    <div className="flex-1">
+                      <h4 className="font-semibold text-foreground">
+                        {service.title}
+                      </h4>
+                      <p className="text-sm text-primary font-medium">
+                        R$ {service.price} / {service.unit || service.priceUnit}
+                      </p>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => handleEditService(service)}
+                      >
+                        <Edit2 className="w-4 h-4" />
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => handleDeleteService(service.id)}
+                        className="text-destructive hover:text-destructive"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  </div>
+                  {service.description && (
+                    <p className="text-sm text-muted-foreground line-clamp-2">
+                      {service.description}
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="border border-dashed border-border rounded-lg p-6 text-center">
+              <Briefcase className="w-12 h-12 text-muted-foreground mx-auto mb-3" />
+              <p className="text-sm text-muted-foreground">
+                Adicione serviços com preços, horários e taxas personalizadas.
+              </p>
+            </div>
+          )}
+        </div>
+
+        {/* Submit Button */}
+        <Button
+          type="submit"
+          className="w-full joby-gradient text-primary-foreground"
+          disabled={loading}
+        >
+          {loading ? 'Salvando...' : 'Salvar Alterações'}
+        </Button>
+      </form>
+
+      {/* Service Form Modal */}
+      {showServiceForm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+            className="w-full max-w-2xl max-h-[90vh] overflow-y-auto"
+          >
+            <ServiceForm
+              isOpen={showServiceForm}
+              onClose={() => {
+                setShowServiceForm(false)
+                setEditingService(null)
+              }}
+              onSave={handleSaveService}
+              editingService={editingService}
+            />
+          </motion.div>
+        </div>
+      )}
+    </motion.div>
+  )
+}
+
+export default ProfileEdit

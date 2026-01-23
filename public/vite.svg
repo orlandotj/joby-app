@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-label="JOBY">
+  <rect width="64" height="64" rx="14" fill="#111827"/>
+  <path d="M32 10c3 0 5.8 1.6 7.3 4.2l10.2 17.6c1.5 2.6 1.5 5.8 0 8.4L39.3 57.8C37.8 60.4 35 62 32 62s-5.8-1.6-7.3-4.2L14.5 40.2c-1.5-2.6-1.5-5.8 0-8.4l10.2-17.6C26.2 11.6 29 10 32 10z" fill="#f97316"/>
+  <path d="M32 21l7.5 13-7.5 13-7.5-13 7.5-13z" fill="#ffffff" fill-opacity="0.85"/>
+</svg>

@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="pt">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Upload APK para Supabase</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js"></script>
+  </head>
+  <body>
+    <h2>Upload do APK</h2>
+
+    <input type="file" id="fileInput" accept=".apk" />
+    <button onclick="upload()">Enviar APK</button>
+
+    <script>
+      const supabase = supabase.createClient(
+        'https://sondqndusmtxyhmtombv.supabase.co',
+        /* Use your anon key here. For development set VITE_SUPABASE_KEY in .env and inject it at build time. */
+        'REPLACE_WITH_VITE_SUPABASE_KEY'
+      )
+
+      async function upload() {
+        const file = document.getElementById('fileInput').files[0]
+        if (!file) return alert('Selecione um arquivo APK')
+
+        const filePath = `apks/${Date.now()}_${file.name}`
+
+        // Upload para o bucket
+        const { data, error } = await supabase.storage
+          .from('midias')
+          .upload(filePath, file)
+
+        if (error) return alert('Erro ao enviar: ' + error.message)
+
+        // Gerar URL pública
+        const url = supabase.storage.from('midias').getPublicUrl(filePath)
+          .data.publicUrl
+
+        alert('APK enviado com sucesso! URL pública: ' + url)
+        console.log('URL pública do APK:', url)
+      }
+    </script>
+  </body>
+</html>

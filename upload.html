@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="pt">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Upload para Supabase</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js"></script>
+  </head>
+  <body>
+    <h2>Upload de Imagem ou Vídeo</h2>
+
+    <input type="file" id="fileInput" />
+    <button onclick="upload()">Enviar</button>
+
+    <script>
+      const supabase = supabase.createClient(
+        'https://sondqndusmtxyhmtombv.supabase.co',
+        /* Use your anon key here. For development set VITE_SUPABASE_KEY in .env and inject it at build time. */
+        'REPLACE_WITH_VITE_SUPABASE_KEY'
+      )
+
+      async function upload() {
+        const file = document.getElementById('fileInput').files[0]
+        if (!file) return alert('Selecione um arquivo')
+
+        const filePath = `publicacoes/${Date.now()}_${file.name}`
+
+        // 1. Upload para o bucket
+        const { data, error } = await supabase.storage
+          .from('uploudsjoby')
+          .upload(filePath, file)
+
+        if (error) {
+          alert('Erro ao enviar: ' + error.message)
+          console.error('Erro no upload:', error)
+          return
+        }
+
+        // 2. Gerar a URL pública
+        const url = supabase.storage.from('uploudsjoby').getPublicUrl(filePath)
+          .data.publicUrl
+        const tipo = file.type.includes('video') ? 'video' : 'foto'
+
+        // 3. Salvar na tabela "publicacoes"
+        const user = await supabase.auth.getUser() // Pega o usuário logado
+        const userId = user.data?.user?.id
+
+        if (!userId) {
+          alert('Usuário não autenticado. Faça login antes de postar.')
+          console.error('Usuário não autenticado:', user)
+          return
+        }
+
+        const { error: insertError } = await supabase
+          .from('publicacoes')
+          .insert([{ user_id: userId, legenda: 'Post automático', tipo, url }])
+
+        if (insertError) {
+          alert('Erro ao salvar no banco: ' + insertError.message)
+          console.error('Erro na inserção:', insertError)
+          return
+        }
+
+        alert('Postagem feita com sucesso!')
+      }
+    </script>
+  </body>
+</html>

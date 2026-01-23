@@ -1,0 +1,1429 @@
+import React, { useState, useEffect, useRef, useMemo } from 'react'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
+import { motion } from 'framer-motion'
+import ProfileHeader from '@/components/ProfileHeader'
+import VideoCard from '@/components/VideoCard'
+import ContentViewModal from '@/components/ContentViewModal'
+import LazyImage from '@/components/LazyImage'
+import { Tabs, TabsContent } from '@/components/ui/tabs'
+import { Card, CardContent } from '@/components/ui/card'
+import {
+  Star,
+  Briefcase,
+  UploadCloud,
+  PlayCircle,
+  MessageSquare as MessageSquareText,
+  Image as ImageIcon,
+  Video as VideoIcon,
+  Eye,
+  MoreVertical,
+  Pencil,
+  Trash2,
+  Clock,
+  MapPin,
+  TrendingUp,
+  Zap,
+  Users,
+} from 'lucide-react'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { Button } from '@/components/ui/button'
+import { useAuth } from '@/contexts/AuthContext'
+import AddContentFab from '@/components/AddContentFab'
+import UploadDialog from '@/components/UploadDialog'
+import ServiceForm from '@/components/ServiceForm'
+import ServiceDetailsModal from '@/components/ServiceDetailsModal'
+import { supabase } from '@/lib/supabaseClient'
+import { getProfileDisplayName } from '@/lib/profileDisplay'
+import { resolveStorageUrl, useResolvedStorageUrl } from '@/lib/storageUrl'
+import { useToast } from '@/components/ui/use-toast'
+import { isUuid } from '@/lib/uuid'
+import { formatPriceUnit } from '@/lib/priceUnit'
+import { useSwipeTabs } from '@/hooks/useSwipeTabs'
+import { TabTransition } from '@/components/TabTransition'
+
+const imageDebugOn = () => {
+  try {
+    return !!(import.meta.env.DEV && window.__JOBY_IMAGE_DEBUG__)
+  } catch {
+    return false
+  }
+}
+
+const SERVICE_COVER_PLACEHOLDER =
+  'https://placehold.co/600x400/e2e8f0/64748b?text=Serviço'
+
+const ServiceCoverImage = ({ service }) => {
+  const resolvedSrc = useResolvedStorageUrl(service?.image || '', {
+    debugLabel: `service:${service?.id}:cover`,
+  })
+
+  const finalSrc = resolvedSrc || SERVICE_COVER_PLACEHOLDER
+
+  return (
+    <img
+      src={finalSrc}
+      alt={service?.title || 'Serviço'}
+      className="w-full h-full object-cover"
+      loading="lazy"
+      decoding="async"
+    />
+  )
+}
+
+// Componente separado para cada item de vídeo
+const VideoGridItem = ({ video, onClick, index = 0 }) => {
+  const videoRef = useRef(null)
+  const [shouldPlay, setShouldPlay] = useState(false)
+
+  const renderCount = useRef(0)
+  renderCount.current += 1
+
+  const videoSrc = useResolvedStorageUrl(video?.url, {
+    preferPublic: true,
+    debugLabel: `video:${video?.id}:url`,
+  })
+  const posterSrc = useResolvedStorageUrl(video?.thumbnail || '', {
+    preferPublic: true,
+    debugLabel: `video:${video?.id}:thumb`,
+  })
+  
+  // Apenas primeira linha (2 itens) acima da dobra
+  const isAboveFold = index < 2
+  const preloadStrategy = isAboveFold ? 'auto' : 'metadata'
+
+  const handleMouseEnter = () => {
+    setShouldPlay(true)
+  }
+
+  const handleMouseLeave = () => {
+    setShouldPlay(false)
+    if (videoRef.current) {
+      videoRef.current.pause()
+      videoRef.current.currentTime = 0
+    }
+  }
+
+  useEffect(() => {
+    if (!shouldPlay) return
+    if (!videoRef.current) return
+    if (!videoSrc) return
+
+    videoRef.current
+      .play()
+      .catch((e) => import.meta.env.DEV && console.log('Play error:', e))
+  }, [shouldPlay, videoSrc])
+
+  useEffect(() => {
+    if (!imageDebugOn()) return
+    const t = performance.now()
+    console.log(`[IMG] VideoGridItem mount id=${video?.id} idx=${index} t=${t.toFixed(1)}`)
+    return () => {
+      const t2 = performance.now()
+      console.log(`[IMG] VideoGridItem unmount id=${video?.id} idx=${index} t=${t2.toFixed(1)}`)
+    }
+  }, [video?.id, index])
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.15 }}
+      className="aspect-[9/16] bg-muted rounded-lg overflow-hidden relative group cursor-pointer"
+      style={{ willChange: 'opacity', transform: 'translateZ(0)' }}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+      onClick={onClick}
+    >
+      <video
+        ref={videoRef}
+        src={videoSrc || undefined}
+        className="w-full h-full object-cover"
+        poster={posterSrc || undefined}
+        preload={preloadStrategy}
+        muted
+        loop
+        playsInline
+        onLoadedData={() => {
+          if (imageDebugOn() && isAboveFold) {
+            console.log(
+              `[IMG] video loaded id=${video?.id} idx=${index} render#${renderCount.current} src=${String(
+                videoSrc
+              ).substring(0, 80)}... t=${performance.now().toFixed(1)}`
+            )
+          }
+        }}
+      />
+      <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent flex flex-col justify-end p-3">
+        <div className="flex items-center justify-between text-white">
+          <div className="flex items-center gap-1.5">
+            <PlayCircle size={18} className="opacity-90" />
+            <span className="text-sm font-semibold">
+              {video.duration || '0:54'}
+            </span>
+          </div>
+          <div className="flex items-center gap-1.5 bg-black/40 backdrop-blur-sm rounded-full px-2.5 py-1">
+            <Eye size={16} className="opacity-90" />
+            <span className="text-sm font-medium">{video.views || 0}</span>
+          </div>
+        </div>
+      </div>
+      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-all duration-300 flex items-center justify-center">
+        <PlayCircle
+          size={48}
+          className="text-white opacity-0 group-hover:opacity-100 transition-opacity duration-300 drop-shadow-lg"
+        />
+      </div>
+    </motion.div>
+  )
+}
+
+const PhotoGridItem = ({ photo, onClick, index = 0 }) => {
+  const renderCount = useRef(0)
+  renderCount.current += 1
+
+  useEffect(() => {
+    if (!imageDebugOn()) return
+    const t = performance.now()
+    console.log(`[IMG] PhotoGridItem mount id=${photo?.id} idx=${index} t=${t.toFixed(1)}`)
+    return () => {
+      const t2 = performance.now()
+      console.log(`[IMG] PhotoGridItem unmount id=${photo?.id} idx=${index} t=${t2.toFixed(1)}`)
+    }
+  }, [photo?.id, index])
+
+  const photoSrc = useResolvedStorageUrl(photo?.url, {
+    preferPublic: true,
+    debugLabel: `photo:${photo?.id}:url`,
+  })
+  
+  // NÃO usar transformSupabasePublicImageUrl aqui - gera querystrings dinâmicas!
+  // Usar URL original para cache funcionar. Thumbnail pode ser feito no backend.
+  const finalSrc = photoSrc || ''
+  
+  const [imgLoaded, setImgLoaded] = useState(false)
+  const loadStartTime = useRef(performance.now())
+  
+  // Apenas primeira linha (2 itens) com eager
+  const isAboveFold = index < 2
+  const loadingStrategy = isAboveFold ? 'eager' : 'lazy'
+  const fetchPriority = isAboveFold ? 'high' : 'auto'
+
+  const handleImageLoad = () => {
+    const loadTime = performance.now() - loadStartTime.current
+    setImgLoaded(true)
+    if (imageDebugOn() && isAboveFold) {
+      console.log(
+        `[IMG] photo loaded id=${photo?.id} idx=${index} render#${renderCount.current} in ${loadTime.toFixed(
+          2
+        )}ms (${loadingStrategy}) url=${String(finalSrc).substring(0, 80)}...`
+      )
+    }
+  }
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.15 }}
+      className="aspect-[9/16] bg-muted rounded-lg overflow-hidden relative group cursor-pointer"
+      style={{ willChange: 'opacity', transform: 'translateZ(0)' }}
+      onClick={onClick}
+    >
+      {/* Skeleton apenas enquanto carrega */}
+      {!imgLoaded && (
+        <div className="absolute inset-0 bg-muted/40 animate-pulse" />
+      )}
+      
+      {finalSrc && (
+        <img
+          src={finalSrc}
+          alt={photo?.caption || 'Foto do portfólio'}
+          className={`w-full h-full object-cover group-hover:scale-105 transition-transform duration-300 ${
+            imgLoaded ? 'opacity-100' : 'opacity-0'
+          }`}
+          loading={loadingStrategy}
+          decoding="async"
+          fetchpriority={fetchPriority}
+          onLoad={handleImageLoad}
+        />
+      )}
+      
+      <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent flex flex-col justify-end p-3">
+        <div className="flex items-center justify-between text-white">
+          <h4 className="text-sm font-semibold truncate drop-shadow-lg flex-1">
+            {photo?.caption}
+          </h4>
+          <div className="flex items-center gap-1.5 bg-black/40 backdrop-blur-sm rounded-full px-2.5 py-1 ml-2">
+            <Eye size={16} className="opacity-90" />
+            <span className="text-sm font-medium">{photo?.views || 0}</span>
+          </div>
+        </div>
+      </div>
+    </motion.div>
+  )
+}
+
+const Profile = () => {
+  const { id: profileId } = useParams() // Renamed to avoid conflict with item id
+  const location = useLocation()
+  const navigate = useNavigate()
+  const { user: currentUser } = useAuth()
+  const [user, setUser] = useState(null)
+  const [videos, setVideos] = useState([])
+  const [photos, setPhotos] = useState([]) // Added state for photos
+  const [reviews, setReviews] = useState([])
+  const [services, setServices] = useState([])
+  const [profileLoading, setProfileLoading] = useState(true)
+  const [contentLoading, setContentLoading] = useState(true)
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
+  const [activeTab, setActiveTab] = useState('videos')
+  const [isUploadDialogOpen, setIsUploadDialogOpen] = useState(false)
+  const [uploadType, setUploadType] = useState('') // 'photo', 'short-video', 'long-video'
+  const [isServiceFormOpen, setIsServiceFormOpen] = useState(false)
+  const [isServiceDetailsOpen, setIsServiceDetailsOpen] = useState(false)
+  const [selectedService, setSelectedService] = useState(null)
+  const [editingService, setEditingService] = useState(null)
+  const [followersCount, setFollowersCount] = useState(0)
+  const [followingCount, setFollowingCount] = useState(0)
+  const [isFollowing, setIsFollowing] = useState(false)
+  const [selectedContent, setSelectedContent] = useState(null)
+  const [isContentModalOpen, setIsContentModalOpen] = useState(false)
+
+  const TAB_ORDER = ['videos', 'services', 'reviews']
+  const swipeTabs = useSwipeTabs({
+    tabs: TAB_ORDER,
+    value: activeTab,
+    onValueChange: setActiveTab,
+    disabled:
+      isMobileMenuOpen ||
+      isUploadDialogOpen ||
+      isServiceFormOpen ||
+      isServiceDetailsOpen ||
+      isContentModalOpen,
+  })
+
+  const { toast } = useToast()
+
+  const isOwnProfile = currentUser?.id === profileId
+
+  // Prevent duplicate in-flight loads (React 18 StrictMode runs effects twice in DEV)
+  const loadSeqRef = useRef(0)
+  const loadInFlightRef = useRef({ profileId: null, seq: 0, inFlight: false })
+  const lastGridLogRef = useRef('')
+
+  // DEBUG: Contador de renders
+  const renderCount = useRef(0)
+  useEffect(() => {
+    renderCount.current += 1
+    if (imageDebugOn()) {
+      console.log(`[PROFILE] 🔄 Render #${renderCount.current} - profileId: ${profileId}`)
+    }
+  })
+
+  // Detectar quando o menu mobile está aberto
+  useEffect(() => {
+    const checkMobileMenu = () => {
+      // Verificar se existe algum overlay do menu usando attribute selector
+      const overlays = document.querySelectorAll('.fixed.inset-0')
+      let menuOverlayFound = false
+
+      overlays.forEach((overlay) => {
+        const hasBackdrop =
+          overlay.className.includes('bg-black') &&
+          overlay.className.includes('60')
+        if (hasBackdrop) {
+          menuOverlayFound = true
+        }
+      })
+
+      setIsMobileMenuOpen(menuOverlayFound)
+    }
+
+    // Verificar inicialmente
+    checkMobileMenu()
+
+    // Usar MutationObserver para detectar mudanças no DOM
+    const observer = new MutationObserver(checkMobileMenu)
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+    })
+
+    return () => observer.disconnect()
+  }, [])
+
+  useEffect(() => {
+    if (!profileId) return
+
+    // Guard rails: avoid queries like id=eq.edit (and any other invalid uuid)
+    if (profileId === 'edit') {
+      navigate(`/me/edit${location.search || ''}`, { replace: true })
+      return
+    }
+
+    if (!isUuid(profileId)) {
+      navigate('/404', { replace: true })
+      return
+    }
+
+    if (imageDebugOn()) console.log('Loading profile for:', profileId)
+    loadUserProfile()
+  }, [profileId])
+
+  const updateSearchParams = (mutate, { replace = false } = {}) => {
+    const params = new URLSearchParams(location.search)
+    mutate(params)
+    const search = params.toString()
+    navigate(
+      {
+        pathname: location.pathname,
+        search: search ? `?${search}` : '',
+      },
+      { replace }
+    )
+  }
+
+  // Sync: URL -> state (aba + modais)
+  useEffect(() => {
+    const params = new URLSearchParams(location.search)
+
+    const tab = params.get('tab')
+    if (tab && ['videos', 'services', 'reviews'].includes(tab)) {
+      if (activeTab !== tab) setActiveTab(tab)
+    }
+
+    const upload = params.get('upload')
+    if (upload && ['photo', 'short-video', 'long-video'].includes(upload)) {
+      if (!isUploadDialogOpen || uploadType !== upload) {
+        setUploadType(upload)
+        setIsUploadDialogOpen(true)
+      }
+    } else if (isUploadDialogOpen) {
+      setIsUploadDialogOpen(false)
+    }
+
+    const contentId = params.get('contentId')
+    const contentType = params.get('contentType')
+    if (contentId && (contentType === 'photo' || contentType === 'video')) {
+      const source = contentType === 'photo' ? photos : videos
+      const found = source.find((item) => String(item.id) === String(contentId))
+      if (found) {
+        const next = { ...found, type: contentType }
+        if (!isContentModalOpen || selectedContent?.id !== next.id) {
+          setSelectedContent(next)
+          setIsContentModalOpen(true)
+        }
+      }
+    } else if (isContentModalOpen) {
+      setSelectedContent(null)
+      setIsContentModalOpen(false)
+    }
+
+    const serviceId = params.get('service')
+    if (serviceId) {
+      const found = services.find((s) => String(s.id) === String(serviceId))
+      if (found) {
+        if (!isServiceDetailsOpen || selectedService?.id !== found.id) {
+          setSelectedService(found)
+          setIsServiceDetailsOpen(true)
+        }
+      }
+    } else if (isServiceDetailsOpen) {
+      setIsServiceDetailsOpen(false)
+      setSelectedService(null)
+    }
+
+    const serviceForm = params.get('serviceForm')
+    const editServiceId = params.get('editService')
+    if (serviceForm) {
+      const toEdit = editServiceId
+        ? services.find((s) => String(s.id) === String(editServiceId))
+        : null
+      if (
+        !isServiceFormOpen ||
+        (editServiceId && editingService?.id !== toEdit?.id)
+      ) {
+        setEditingService(toEdit)
+        setIsServiceFormOpen(true)
+      }
+    } else if (isServiceFormOpen) {
+      setIsServiceFormOpen(false)
+      setEditingService(null)
+    }
+  }, [location.search, photos, videos, services])
+
+  // Sync: state -> URL (aba). Use replace para não poluir histórico.
+  useEffect(() => {
+    const params = new URLSearchParams(location.search)
+    const current = params.get('tab')
+    if (activeTab && current !== activeTab) {
+      updateSearchParams((p) => p.set('tab', activeTab), { replace: true })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab])
+
+  const loadUserProfile = async () => {
+    if (!profileId) {
+      console.error('No profileId provided')
+      return
+    }
+
+    if (!isUuid(profileId)) {
+      console.error('Invalid profileId (not a UUID):', profileId)
+      return
+    }
+
+    // Skip duplicate calls for the same profileId while an earlier request is in-flight.
+    if (
+      loadInFlightRef.current.inFlight &&
+      loadInFlightRef.current.profileId === profileId
+    ) {
+      if (imageDebugOn()) {
+        console.log(`[PROFILE] ⏭️ Skip duplicate in-flight load for ${profileId}`)
+      }
+      return
+    }
+
+    const seq = (loadSeqRef.current += 1)
+    loadInFlightRef.current = { profileId, seq, inFlight: true }
+    const isStale = () => loadSeqRef.current !== seq
+
+    const t0 = performance.now()
+    if (imageDebugOn()) {
+      console.log(
+        `[PROFILE] ⏱️ Start loading profile ${profileId} seq=${seq} at ${t0.toFixed(2)}ms`
+      )
+    }
+
+    setProfileLoading(true)
+    setContentLoading(true)
+
+    try {
+      // FASE 1: Carregar profile PRIMEIRO (crítico para foto/capa aparecerem rápido)
+      const t1 = performance.now()
+      let profileResult = await supabase
+        .from('profiles')
+        .select(
+          'id, username, can_offer_service, profession, bio, avatar, cover_image, location, created_at'
+        )
+        .eq('id', profileId)
+        .single()
+
+      if (profileResult.error) {
+        const msg = String(profileResult.error?.message || profileResult.error)
+        const isMissingColumn =
+          msg.toLowerCase().includes('column') && msg.toLowerCase().includes('does not exist')
+        if (isMissingColumn) {
+          profileResult = await supabase
+            .from('profiles')
+            .select(
+              'id, name, can_offer_service, profession, bio, avatar, cover_image, location, created_at'
+            )
+            .eq('id', profileId)
+            .single()
+        }
+      }
+
+      const t2 = performance.now()
+      if (imageDebugOn()) {
+        console.log(`[PROFILE] ✅ Profile fetched in ${(t2 - t1).toFixed(2)}ms`)
+      }
+
+      if (isStale()) return
+
+      if (profileResult.error) throw profileResult.error
+      const profileData = profileResult.data
+
+      const display = getProfileDisplayName(profileData)
+
+      // Renderizar profile IMEDIATAMENTE (foto e capa aparecem agora!)
+      setUser({
+        ...profileData,
+        name: display,
+        display_name: display,
+        coverImage: profileData?.cover_image,
+      })
+      setProfileLoading(false)
+      if (imageDebugOn()) {
+        console.log(`[PROFILE] 🖼️ Avatar URL: ${profileData?.avatar}`)
+      }
+
+      // FASE 2: Carregar conteúdo em paralelo (não bloqueia foto/capa)
+      const t3 = performance.now()
+      const loadVideos = async () => {
+        const base = supabase
+          .from('videos')
+          .eq('user_id', profileId)
+          .eq('is_public', true)
+          .order('created_at', { ascending: false })
+          .limit(12)
+
+        const r1 = await base.select(
+          'id, url, title, thumbnail, views, likes, comments_count, created_at, video_type, provider'
+        )
+        if (!r1.error) return r1
+
+        const msg = String(r1.error?.message || '').toLowerCase()
+        if (msg.includes('column') && msg.includes('does not exist')) {
+          return base.select(
+            'id, url, title, thumbnail, views, likes, created_at, video_type, provider'
+          )
+        }
+
+        return r1
+      }
+
+      const loadPhotos = async () => {
+        const base = supabase
+          .from('photos')
+          .eq('user_id', profileId)
+          .eq('is_public', true)
+          .order('created_at', { ascending: false })
+          .limit(12)
+
+        const r1 = await base.select('id, url, caption, views, likes, comments_count, created_at, provider')
+        if (!r1.error) return r1
+
+        const msg = String(r1.error?.message || '').toLowerCase()
+        if (msg.includes('column') && msg.includes('does not exist')) {
+          return base.select('id, url, caption, views, likes, created_at, provider')
+        }
+
+        return r1
+      }
+
+      const [videosResult, photosResult] = await Promise.all([loadVideos(), loadPhotos()])
+
+      const t4 = performance.now()
+      if (imageDebugOn()) {
+        console.log(`[PROFILE] ✅ Content fetched in ${(t4 - t3).toFixed(2)}ms`)
+      }
+
+      if (isStale()) return
+
+      // Log errors from photos and videos queries
+      if (photosResult.error) {
+        console.error('Error loading photos:', photosResult.error)
+      }
+      if (videosResult.error) {
+        console.error('Error loading videos:', videosResult.error)
+      }
+
+      setVideos(videosResult.data || [])
+      setPhotos(photosResult.data || [])
+
+      if (imageDebugOn()) {
+        console.log(
+          `[PROFILE] raw avatar=${String(profileData?.avatar || '').substring(0, 120)}...`
+        )
+        console.log(
+          `[PROFILE] raw cover_image=${String(profileData?.cover_image || '').substring(0, 120)}...`
+        )
+      }
+
+      // PRÉ-CARREGAR apenas avatar + capa + PRIMEIROS 2 do grid (primeira linha) — e resolver storage:// via publicUrl estável
+      ;(async () => {
+        const preloadUrls = new Set() // Dedupe: evita carregar mesma URL várias vezes
+
+        const allContent = [
+          ...(photosResult.data || []).map((p) => ({ ...p, type: 'photo' })),
+          ...(videosResult.data || []).map((v) => ({ ...v, type: 'video' })),
+        ]
+          .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+          .slice(0, 2)
+
+        const candidates = [
+          { raw: profileData?.avatar, label: 'preload:avatar' },
+          { raw: profileData?.cover_image, label: 'preload:cover' },
+          ...allContent.map((item) => ({
+            raw: item.type === 'photo' ? item.url : item.thumbnail,
+            label: `preload:${item.type}:${item.id}`,
+          })),
+        ]
+
+        const t5 = imageDebugOn() ? performance.now() : 0
+        await Promise.all(
+          candidates.map(async (c) => {
+            if (!c.raw) return
+            const url = await resolveStorageUrl(c.raw, {
+              preferPublic: true,
+              debugLabel: c.label,
+            })
+            if (url) preloadUrls.add(url)
+          })
+        )
+
+        const preloadedImages = []
+        preloadUrls.forEach((url) => {
+          const img = new Image()
+          img.src = url
+          preloadedImages.push(img)
+        })
+
+        if (imageDebugOn()) {
+          const t6 = performance.now()
+          console.log(
+            `[PROFILE] 👁️ Preloading ${preloadedImages.length} unique images (critical) in ${(t6 - t5).toFixed(
+              2
+            )}ms`
+          )
+          console.log(`[PROFILE] 🔗 Preload URLs:`, Array.from(preloadUrls))
+        }
+      })()
+
+      // Carregar dados secundários em paralelo (apenas contagens)
+      const [reviewsResult, servicesResult] = await Promise.all([
+        supabase
+          .from('reviews')
+          .select('rating', { count: 'exact' })
+          .eq('professional_id', profileId)
+          .limit(5),
+        supabase
+          .from('services')
+          .select(
+            'id, title, price, price_unit, category, image, views, bookings_count'
+          )
+          .eq('user_id', profileId)
+          .eq('is_active', true)
+          .order('created_at', { ascending: false })
+          .limit(6),
+      ])
+
+      // Calcular rating apenas se houver reviews
+      if (reviewsResult.data && reviewsResult.data.length > 0) {
+        const avgRating =
+          reviewsResult.data.reduce((sum, review) => sum + review.rating, 0) /
+          reviewsResult.data.length
+        profileData.rating = parseFloat(avgRating.toFixed(1))
+        profileData.reviews_count = reviewsResult.data.length
+      }
+      setReviews(reviewsResult.data || [])
+      setServices(servicesResult.data || [])
+
+      // Carregar apenas contadores essenciais em paralelo
+      const countersPromises = [
+        supabase
+          .from('follows')
+          .select('*', { count: 'exact', head: true })
+          .eq('following_id', profileId),
+        supabase
+          .from('follows')
+          .select('*', { count: 'exact', head: true })
+          .eq('follower_id', profileId),
+      ]
+
+      // Adicionar verificação de follow apenas se necessário
+      if (currentUser && currentUser.id !== profileId) {
+        countersPromises.push(
+          supabase
+            .from('follows')
+            .select('id')
+            .eq('follower_id', currentUser.id)
+            .eq('following_id', profileId)
+            .maybeSingle()
+        )
+      }
+
+      const countersResults = await Promise.all(countersPromises)
+
+      setFollowersCount(countersResults[0].count || 0)
+      setFollowingCount(countersResults[1].count || 0)
+
+      if (countersResults[2]) {
+        setIsFollowing(!!countersResults[2].data)
+      }
+
+      // Atualizar o state do usuário com todos os dados calculados
+      setUser(profileData)
+    } catch (error) {
+      console.error('Erro ao carregar perfil:', error)
+      if (!isStale()) setProfileLoading(false) // Libera render mesmo com erro
+    } finally {
+      if (!isStale()) setContentLoading(false)
+      if (loadInFlightRef.current.seq === seq) {
+        loadInFlightRef.current.inFlight = false
+      }
+    }
+  }
+
+  const handleOpenUploadDialog = (type) => {
+    setUploadType(type)
+    setIsUploadDialogOpen(true)
+
+    updateSearchParams(
+      (p) => {
+        p.set('upload', type)
+      },
+      { replace: false }
+    )
+  }
+
+  const handleOpenContentModal = (content) => {
+    setSelectedContent(content)
+    setIsContentModalOpen(true)
+
+    const contentType = content?.type === 'photo' ? 'photo' : 'video'
+    updateSearchParams(
+      (p) => {
+        p.set('contentType', contentType)
+        p.set('contentId', String(content.id))
+      },
+      { replace: false }
+    )
+  }
+
+  const handleCloseContentModal = () => {
+    setSelectedContent(null)
+    setIsContentModalOpen(false)
+
+    updateSearchParams(
+      (p) => {
+        p.delete('contentType')
+        p.delete('contentId')
+      },
+      { replace: true }
+    )
+  }
+
+  const handleDeleteContent = async (content) => {
+    if (!currentUser?.id) {
+      toast({
+        title: 'Login necessário',
+        description: 'Você precisa estar logado para excluir.',
+        variant: 'destructive',
+      })
+      return
+    }
+    if (!content?.id) return
+
+    try {
+      const isPhoto = content?.type === 'photo'
+      const table = isPhoto ? 'photos' : 'videos'
+
+      const { error } = await supabase
+        .from(table)
+        .delete()
+        .eq('id', content.id)
+        .eq('user_id', currentUser.id)
+
+      if (error) throw error
+
+      if (isPhoto) setPhotos((prev) => prev.filter((p) => p.id !== content.id))
+      else setVideos((prev) => prev.filter((v) => v.id !== content.id))
+
+      toast({
+        title: 'Conteúdo excluído',
+        description: 'O conteúdo foi removido com sucesso.',
+        variant: 'success',
+      })
+
+      handleCloseContentModal()
+    } catch (error) {
+      console.error('Erro ao excluir conteúdo:', error)
+      toast({
+        title: 'Erro ao excluir',
+        description: error?.message || 'Não foi possível excluir. Tente novamente.',
+        variant: 'destructive',
+      })
+    }
+  }
+
+  const handleEditContent = async (content) => {
+    if (!currentUser?.id) {
+      toast({
+        title: 'Login necessário',
+        description: 'Você precisa estar logado para editar.',
+        variant: 'destructive',
+      })
+      return
+    }
+    if (!content?.id) return
+
+    const isPhoto = content?.type === 'photo'
+
+    const nextValue = window.prompt(
+      isPhoto ? 'Editar legenda da foto:' : 'Editar título do vídeo:',
+      isPhoto ? content?.caption || '' : content?.title || ''
+    )
+
+    if (nextValue === null) return
+    const trimmed = nextValue.trim()
+
+    try {
+      if (isPhoto) {
+        const { error } = await supabase
+          .from('photos')
+          .update({ caption: trimmed })
+          .eq('id', content.id)
+          .eq('user_id', currentUser.id)
+
+        if (error) throw error
+
+        setPhotos((prev) =>
+          prev.map((p) => (p.id === content.id ? { ...p, caption: trimmed } : p))
+        )
+
+        setSelectedContent((prev) => (prev ? { ...prev, caption: trimmed } : prev))
+      } else {
+        const { error } = await supabase
+          .from('videos')
+          .update({ title: trimmed })
+          .eq('id', content.id)
+          .eq('user_id', currentUser.id)
+
+        if (error) throw error
+
+        setVideos((prev) =>
+          prev.map((v) => (v.id === content.id ? { ...v, title: trimmed } : v))
+        )
+
+        setSelectedContent((prev) => (prev ? { ...prev, title: trimmed } : prev))
+      }
+
+      toast({
+        title: 'Conteúdo atualizado',
+        description: 'Alterações salvas com sucesso.',
+        variant: 'success',
+      })
+    } catch (error) {
+      console.error('Erro ao editar conteúdo:', error)
+      toast({
+        title: 'Erro ao editar',
+        description: error?.message || 'Não foi possível salvar. Tente novamente.',
+        variant: 'destructive',
+      })
+    }
+  }
+
+  const handleContentUploaded = (newContent) => {
+    if (import.meta.env.DEV) console.log('New content uploaded:', newContent)
+
+    // Atualizar estado baseado no tipo de conteúdo
+    if (newContent.type === 'photo') {
+      setPhotos((prev) => [newContent, ...prev])
+    } else if (
+      newContent.type === 'short-video' ||
+      newContent.type === 'long-video'
+    ) {
+      setVideos((prev) => [newContent, ...prev])
+    }
+
+    // Recarregar o perfil para garantir dados atualizados
+    setTimeout(() => {
+      loadUserProfile()
+    }, 500)
+
+    setIsUploadDialogOpen(false)
+
+    updateSearchParams(
+      (p) => {
+        p.delete('upload')
+      },
+      { replace: true }
+    )
+  }
+
+  const handleOpenServiceForm = (service = null) => {
+    setEditingService(service)
+    setIsServiceFormOpen(true)
+
+    updateSearchParams(
+      (p) => {
+        p.set('serviceForm', '1')
+        if (service?.id) p.set('editService', String(service.id))
+        else p.delete('editService')
+      },
+      { replace: false }
+    )
+  }
+
+  const handleSaveService = (serviceData) => {
+    if (editingService) {
+      setServices((prev) =>
+        prev.map((s) => (s.id === serviceData.id ? serviceData : s))
+      )
+    } else {
+      setServices((prev) => [serviceData, ...prev])
+    }
+    setIsServiceFormOpen(false)
+    setEditingService(null)
+
+    updateSearchParams(
+      (p) => {
+        p.delete('serviceForm')
+        p.delete('editService')
+      },
+      { replace: true }
+    )
+  }
+
+  const handleViewServiceDetails = (service) => {
+    setSelectedService(service)
+    setIsServiceDetailsOpen(true)
+
+    updateSearchParams(
+      (p) => {
+        p.set('service', String(service.id))
+      },
+      { replace: false }
+    )
+  }
+
+  // Só bloquear se profile crítico ainda não carregou E não tem user
+  if (profileLoading && !user) {
+    return (
+      <div className="flex items-center justify-center min-h-[calc(100vh-150px)]">
+        <motion.div
+          animate={{ rotate: 360 }}
+          transition={{ repeat: Infinity, duration: 1, ease: 'linear' }}
+          className="w-12 h-12 rounded-full joby-gradient"
+          style={{ willChange: 'transform' }}
+        />
+      </div>
+    )
+  }
+
+  if (!user) {
+    return <div className="text-center py-10">Perfil não encontrado.</div>
+  }
+
+  const renderEmptyState = (title, message, icon, actionButton) => (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.2 }}
+      className="text-center py-12 px-4"
+    >
+      {React.createElement(icon, {
+        size: 48,
+        className: 'mx-auto text-muted-foreground mb-4 opacity-70',
+      })}
+      <h3 className="text-xl font-semibold text-foreground mb-2">{title}</h3>
+      <p className="text-muted-foreground mb-6 max-w-md mx-auto">{message}</p>
+      {actionButton && actionButton}
+    </motion.div>
+  )
+
+  return (
+    <>
+      <div
+        className="pb-16 md:pb-4 relative touch-pan-y"
+        style={{ willChange: 'scroll-position', transform: 'translateZ(0)' }}
+        {...swipeTabs.containerProps}
+      >
+        {' '}
+        {/* Added padding bottom for FAB */}
+        <ProfileHeader
+          user={user}
+          activeTab={activeTab}
+          onTabChange={setActiveTab}
+          isOwnProfile={isOwnProfile}
+          followersCount={followersCount}
+          followingCount={followingCount}
+          isFollowing={isFollowing}
+          onFollowChange={loadUserProfile}
+        />
+        <Tabs
+          value={activeTab}
+          onValueChange={setActiveTab}
+          className="px-0 sm:px-2 md:px-0 mt-1"
+        >
+          <TabsContent
+            value="videos"
+            forceMount={true}
+            hidden={activeTab !== 'videos'}
+          >
+            {activeTab === 'videos' ? (
+              <TabTransition value={activeTab} order={['videos', 'services', 'reviews']}>
+                {contentLoading ? (
+                  // Skeleton grid enquanto carrega conteúdo
+                  <div className="grid grid-cols-2 gap-2 pt-4">
+                    {[...Array(6)].map((_, i) => (
+                      <div
+                        key={i}
+                        className="aspect-[9/16] bg-muted rounded-lg overflow-hidden animate-pulse"
+                      />
+                    ))}
+                  </div>
+                ) : videos.length > 0 || photos.length > 0 ? (
+                  <div className="grid grid-cols-2 gap-2 pt-4">
+                    {/* Combinar fotos e vídeos ordenados por data */}
+                    {(() => {
+                      const allContent = [
+                        ...photos.map((p) => ({ ...p, type: 'photo' })),
+                        ...videos.map((v) => ({ ...v, type: 'video' })),
+                      ].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+
+                      // DEBUG: Log primeiras 4 URLs para verificar estabilidade
+                      if (import.meta.env.DEV && imageDebugOn() && allContent.length > 0) {
+                        const first4 = allContent.slice(0, 4).map((item, i) => ({
+                          index: i,
+                          id: item.id,
+                          type: item.type,
+                          url: (item.type === 'photo' ? item.url : item.thumbnail)?.substring(0, 80)
+                        }))
+                        const hash = JSON.stringify(first4)
+                        if (lastGridLogRef.current !== hash) {
+                          lastGridLogRef.current = hash
+                          console.log('[GRID] 🔗 First 4 content items:', first4)
+                        }
+                      }
+
+                      return allContent.map((item, index) =>
+                        item.type === 'video' ? (
+                          <div
+                            key={item.id}
+                            onClick={() => handleOpenContentModal(item)}
+                          >
+                            <VideoGridItem video={item} index={index} />
+                          </div>
+                        ) : (
+                          <PhotoGridItem
+                            key={item.id}
+                            photo={item}
+                            index={index}
+                            onClick={() => handleOpenContentModal(item)}
+                          />
+                        )
+                      )
+                    })()}
+                  </div>
+                ) : isOwnProfile ? (
+                  renderEmptyState(
+                    'Mostre seu Talento!',
+                    "Você ainda não postou fotos ou vídeos. Clique no '+' para adicionar seu primeiro conteúdo e atrair mais clientes!",
+                    PlayCircle,
+                    <Button onClick={() => handleOpenUploadDialog('photo')}>
+                      <UploadCloud size={18} className="mr-2" />
+                      Adicionar Conteúdo
+                    </Button>
+                  )
+                ) : (
+                  renderEmptyState(
+                    'Sem Publicações Ainda',
+                    `${user.name} ainda não compartilhou conteúdo.`,
+                    PlayCircle
+                  )
+                )}
+              </TabTransition>
+            ) : null}
+          </TabsContent>
+
+          <TabsContent
+            value="services"
+            forceMount={true}
+            hidden={activeTab !== 'services'}
+          >
+            {activeTab === 'services' ? (
+              <TabTransition value={activeTab} order={['videos', 'services', 'reviews']}>
+                {contentLoading ? (
+                  // Skeleton grid para serviços
+                  <div className="grid grid-cols-2 gap-4 pt-4 pb-4">
+                    {[...Array(4)].map((_, i) => (
+                      <div
+                        key={i}
+                        className="rounded-2xl overflow-hidden bg-muted animate-pulse h-48"
+                      />
+                    ))}
+                  </div>
+                ) : services.length > 0 ? (
+                  <div className="grid grid-cols-2 gap-4 pt-4 pb-4">
+                    {services.map((service) => (
+                      <motion.div
+                        key={service.id}
+                        initial={{ opacity: 0, scale: 0.95 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        transition={{ duration: 0.2 }}
+                        className="rounded-2xl overflow-hidden bg-card shadow-md hover:shadow-xl transition-all cursor-pointer"
+                        onClick={() => handleViewServiceDetails(service)}
+                      >
+                        {/* Imagem de Capa */}
+                        <div className="relative h-40">
+                          <ServiceCoverImage service={service} />
+
+                          {/* Badge de Destaque */}
+                          {service.bookings_count > 10 && (
+                            <span className="absolute top-2 left-2 bg-gradient-to-r from-orange-500 to-orange-600 text-white text-xs px-3 py-1.5 rounded-full font-semibold shadow-lg flex items-center gap-1">
+                              <TrendingUp size={12} />
+                              Popular
+                            </span>
+                          )}
+
+                          {service.is_available_today && (
+                            <span className="absolute top-2 left-2 bg-gradient-to-r from-blue-500 to-blue-600 text-white text-xs px-3 py-1.5 rounded-full font-semibold shadow-lg flex items-center gap-1">
+                              <Zap size={12} />
+                              Disponível hoje
+                            </span>
+                          )}
+
+                          {/* Menu de Opções - Três Pontinhos */}
+                          {isOwnProfile && (
+                            <div className="absolute top-2 right-2">
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <button
+                                    className="bg-black/60 backdrop-blur-sm text-white rounded-full p-1.5 hover:bg-black/80 transition-colors shadow-lg"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    <MoreVertical size={16} />
+                                  </button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end" className="w-40">
+                                  <DropdownMenuItem
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      handleOpenServiceForm(service)
+                                    }}
+                                  >
+                                    <Pencil size={14} className="mr-2" />
+                                    Editar
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    className="text-red-600"
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      if (import.meta.env.DEV)
+                                        console.log('Deletar serviço:', service.id)
+                                    }}
+                                  >
+                                    <Trash2 size={14} className="mr-2" />
+                                    Excluir
+                                  </DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Conteúdo do Card */}
+                        <div className="p-3">
+                          {/* Título */}
+                          <h3 className="font-bold text-base text-foreground mb-2 line-clamp-2">
+                            {service.title}
+                          </h3>
+
+                          {/* Preço */}
+                          <div className="flex items-baseline gap-1 mb-2">
+                            <span className="text-orange-500 font-bold text-xl">
+                              R$ {service.price}
+                            </span>
+                            <span className="text-muted-foreground text-xs">
+                              / {formatPriceUnit(service.price_unit)}
+                            </span>
+                          </div>
+
+                          {/* Informações em linha única */}
+                          {(() => {
+                            const durationText = String(service?.duration || '').trim()
+                            const locationText = String(
+                              service?.work_area || service?.workArea || user?.location || ''
+                            ).trim()
+
+                            const ratingRaw =
+                              service?.rating != null ? service.rating : user?.rating
+                            const ratingNum = Number(ratingRaw)
+                            const ratingText =
+                              Number.isFinite(ratingNum) && ratingNum > 0
+                                ? ratingNum.toFixed(1).replace('.', ',')
+                                : ''
+
+                            const hasAny =
+                              !!durationText || !!locationText || !!ratingText
+                            if (!hasAny) return null
+
+                            return (
+                              <div className="flex items-center gap-2 text-xs text-muted-foreground mb-3">
+                                {durationText && (
+                                  <span className="flex items-center gap-0.5">
+                                    <Clock size={14} />
+                                    {durationText}
+                                  </span>
+                                )}
+                                {locationText && (
+                                  <span className="flex items-center gap-0.5">
+                                    <MapPin size={14} />
+                                    {locationText}
+                                  </span>
+                                )}
+                                {ratingText && (
+                                  <span className="flex items-center gap-0.5">
+                                    <Star
+                                      size={14}
+                                      className="fill-yellow-400 text-yellow-400"
+                                    />
+                                    {ratingText}
+                                  </span>
+                                )}
+                              </div>
+                            )
+                          })()}
+
+                          {/* Botão CTA */}
+                          <button
+                            className="w-full rounded-lg py-2 text-white font-medium text-sm
+                            bg-gradient-to-r from-orange-500 to-blue-500
+                            hover:opacity-90 hover:shadow-md transition-all duration-200"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleViewServiceDetails(service)
+                            }}
+                          >
+                            {isOwnProfile ? 'Ver Detalhes' : 'Solicitar serviço'}
+                          </button>
+                        </div>
+                      </motion.div>
+                    ))}
+                  </div>
+                ) : isOwnProfile ? (
+                  renderEmptyState(
+                    'Cadastre Seus Serviços',
+                    'Ainda não há serviços cadastrados. Adicione seus serviços para que os clientes saibam o que você oferece.',
+                    Briefcase,
+                    <Button onClick={() => handleOpenServiceForm()}>
+                      <Briefcase size={18} className="mr-2" />
+                      Adicionar Serviço
+                    </Button>
+                  )
+                ) : (
+                  renderEmptyState(
+                    'Serviços Não Informados',
+                    `${user.name} ainda não listou os serviços oferecidos.`,
+                    Briefcase
+                  )
+                )}
+              </TabTransition>
+            ) : null}
+          </TabsContent>
+
+          <TabsContent
+            value="reviews"
+            forceMount={true}
+            hidden={activeTab !== 'reviews'}
+          >
+            {activeTab === 'reviews' ? (
+              <TabTransition value={activeTab} order={['videos', 'services', 'reviews']}>
+                {reviews.length > 0 ? (
+                  <div className="space-y-3 pt-4">
+                    {reviews.map((review) => (
+                      <motion.div
+                        key={review.id}
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        transition={{ duration: 0.15 }}
+                        style={{ willChange: 'opacity' }}
+                      >
+                        <Card className="shadow-sm">
+                          <CardContent className="p-4">
+                            <div className="flex justify-between items-start mb-1">
+                              <h3 className="font-medium text-foreground text-sm">
+                                {review.author}
+                              </h3>
+                              <div className="flex items-center">
+                                <div className="flex">
+                                  {[...Array(5)].map((_, i) => (
+                                    <Star
+                                      key={i}
+                                      size={14}
+                                      className={
+                                        i < review.rating
+                                          ? 'fill-yellow-400 text-yellow-400'
+                                          : 'text-muted'
+                                      }
+                                    />
+                                  ))}
+                                </div>
+                                <span className="text-xs text-muted-foreground ml-2">
+                                  {review.date}
+                                </span>
+                              </div>
+                            </div>
+                            <p className="text-sm text-muted-foreground">
+                              {review.comment}
+                            </p>
+                          </CardContent>
+                        </Card>
+                      </motion.div>
+                    ))}
+                  </div>
+                ) : (
+                  renderEmptyState(
+                    'Sem Avaliações Ainda',
+                    `${user.name} ainda não recebeu avaliações. Seja o primeiro a contratar e avaliar!`,
+                    MessageSquareText
+                  )
+                )}
+              </TabTransition>
+            ) : null}
+          </TabsContent>
+        </Tabs>
+        <UploadDialog
+          isOpen={isUploadDialogOpen}
+          setIsOpen={(open) => {
+            setIsUploadDialogOpen(open)
+            if (!open) {
+              updateSearchParams(
+                (p) => {
+                  p.delete('upload')
+                },
+                { replace: true }
+              )
+            }
+          }}
+          uploadType={uploadType}
+          onUploadComplete={handleContentUploaded}
+        />
+        <ServiceForm
+          isOpen={isServiceFormOpen}
+          onClose={() => {
+            setIsServiceFormOpen(false)
+            setEditingService(null)
+            updateSearchParams(
+              (p) => {
+                p.delete('serviceForm')
+                p.delete('editService')
+              },
+              { replace: true }
+            )
+          }}
+          onSave={handleSaveService}
+          editingService={editingService}
+        />
+        <ServiceDetailsModal
+          isOpen={isServiceDetailsOpen}
+          onClose={() => {
+            setIsServiceDetailsOpen(false)
+            setSelectedService(null)
+            updateSearchParams(
+              (p) => {
+                p.delete('service')
+              },
+              { replace: true }
+            )
+          }}
+          service={selectedService}
+          professional={{ ...user, isOwnProfile }}
+        />
+        <ContentViewModal
+          isOpen={isContentModalOpen}
+          onClose={handleCloseContentModal}
+          content={selectedContent}
+          user={user}
+          onDelete={handleDeleteContent}
+          onEdit={handleEditContent}
+        />
+      </div>
+
+      {/* FAB Button - Outside content flow for true fixed positioning */}
+      {isOwnProfile && !isContentModalOpen && !isMobileMenuOpen && (
+        <AddContentFab onOpenUploadDialog={handleOpenUploadDialog} />
+      )}
+    </>
+  )
+}
+
+export default Profile

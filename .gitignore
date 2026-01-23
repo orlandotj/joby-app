@@ -1,0 +1,28 @@
+# Node deps
+node_modules/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Build output
+dist/
+build/
+public/assets/
+android/app/build/
+
+# Editor / OS
+.DS_Store
+.history/
+.vscode/
+
+# Misc
+npm-debug.log
+pnpm-debug.log
+yarn-debug.log
+yarn-error.log
+
+# Local installers / binaries
+node-installer.msi
+*.msi
