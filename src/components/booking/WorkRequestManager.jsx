@@ -17,6 +17,7 @@ import {
 import { format } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
 import { supabase } from '@/lib/supabaseClient'
+import { log } from '@/lib/logger'
 
 const formatCurrency = (value) => {
   return new Intl.NumberFormat('pt-BR', {
@@ -81,7 +82,7 @@ const WorkRequestManager = ({ userId, userType }) => {
 
       setRequests(formattedRequests)
     } catch (error) {
-      console.error('Erro ao carregar solicitações:', error)
+      log.error('REQUESTS', 'Erro ao carregar solicitações:', error)
       setRequests([])
     } finally {
       setLoading(false)
@@ -111,7 +112,7 @@ const WorkRequestManager = ({ userId, userType }) => {
         variant: 'success',
       })
     } catch (error) {
-      console.error('Erro ao aprovar solicitação:', error)
+      log.error('REQUESTS', 'Erro ao aprovar solicitação:', error)
       toast({
         title: 'Erro',
         description: 'Não foi possível aprovar a solicitação.',
@@ -143,7 +144,7 @@ const WorkRequestManager = ({ userId, userType }) => {
         variant: 'default',
       })
     } catch (error) {
-      console.error('Erro ao recusar solicitação:', error)
+      log.error('REQUESTS', 'Erro ao recusar solicitação:', error)
       toast({
         title: 'Erro',
         description: 'Não foi possível recusar a solicitação.',

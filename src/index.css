@@ -14,8 +14,8 @@
     --primary-foreground: 0 0% 98%;
     --secondary: 210 40% 96.1%; /* Azul mais claro para hover/accent */
     --secondary-foreground: 222 47% 11%;
-    --muted: 220 9% 46%; /* Cinza para texto muted */
-    --muted-foreground: 220 9% 46%;
+    --muted: 210 40% 96.1%; /* Fundo leve para áreas "muted" */
+    --muted-foreground: 215 16% 46.9%; /* Texto secundário com bom contraste */
     --accent: 210 40% 96.1%;
     --accent-foreground: 222 47% 11%;
     --destructive: 0 84.2% 60.2%;
@@ -83,6 +83,61 @@
     min-height: 100%;
     overflow-x: hidden;
   }
+
+  /* When a full-screen overlay is open we hide the bottom nav.
+     Also remove layout padding reserved for the bottom nav to avoid
+     a white strip at the bottom on Android/WebView. */
+  body.joby-overlay-open,
+  html.joby-overlay-open {
+    overscroll-behavior: contain;
+    overflow: hidden;
+    touch-action: none;
+  }
+
+  body.joby-overlay-open .joby-bottom-nav,
+  html.joby-overlay-open .joby-bottom-nav {
+    display: none !important;
+  }
+
+  body.joby-overlay-open main > div {
+    padding-bottom: 0 !important;
+  }
+
+  body.joby-overlay-open .joby-content-shell {
+    padding-bottom: 0 !important;
+  }
+
+  body.joby-overlay-open .safeContainer {
+    padding-bottom: 0 !important;
+  }
+
+  .leaflet-container {
+    background: hsl(var(--muted));
+  }
+}
+
+/* Safe Area (Android edge-to-edge + iOS notch) */
+.safeContainer {
+  padding-top: calc(12px + env(safe-area-inset-top));
+  padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+
+.safeHeader {
+  padding-top: calc(10px + env(safe-area-inset-top));
+}
+
+.safeBottomNav {
+  padding-bottom: calc(8px + env(safe-area-inset-bottom));
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+
+/* Feed tabs bar: when the global header is hidden, the tabs bar moves to top:0.
+  Add a small status/safe inset so it doesn't sit under the system UI. */
+.safeFeedTabs {
+  padding-top: env(safe-area-inset-top);
 }
 
 .video-container {
@@ -132,7 +187,7 @@
   scrollbar-width: none;
 }
 
-.video-controls {
+.video-container .video-controls {
   opacity: 0;
   transition: opacity 0.3s ease;
 }

@@ -8,7 +8,7 @@ import { Card, CardContent } from '@/components/ui/card'
 const ServiceConfirmation = () => {
   const navigate = useNavigate()
   const location = useLocation()
-  const { service, professional, schedule } = location.state || {}
+  const { service, professional, schedule, bookingId } = location.state || {}
 
   // Se não tiver dados, redirecionar
   if (!service || !professional) {
@@ -100,7 +100,18 @@ const ServiceConfirmation = () => {
                 Voltar para Início
               </Button>
               <Button
-                onClick={() => navigate('/messages')}
+                onClick={() => {
+                  if (bookingId && professional?.id) {
+                    const qs = new URLSearchParams({
+                      mode: 'service',
+                      request: String(bookingId),
+                      serviceUser: String(professional.id),
+                    })
+                    navigate(`/messages?${qs.toString()}`)
+                    return
+                  }
+                  navigate('/messages')
+                }}
                 variant="outline"
                 className="w-full"
               >

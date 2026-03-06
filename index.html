@@ -4,9 +4,49 @@
 		<meta charset="UTF-8" />
 		<link rel="icon" type="image/svg+xml" href="/vite.svg" />
 		<meta name="generator" content="Hostinger Horizons" />
-		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 		<title>JOBY - Contrate Profissionais</title>
 		<meta name="description" content="Plataforma para contratação de profissionais autônomos por hora, com portfólio visual e pagamento integrado." />
+		<script type="module">
+			const toOrigin = (raw) => {
+				try {
+					const s = String(raw || '').trim()
+					if (!s) return ''
+					return new URL(s).origin
+				} catch {
+					return ''
+				}
+			}
+
+			const addLink = (rel, href, { crossOrigin } = {}) => {
+				try {
+					if (!href) return
+					const head = document.head
+					if (!head) return
+					// Avoid duplicates
+					if (head.querySelector(`link[rel="${rel}"][href="${href}"]`)) return
+					const link = document.createElement('link')
+					link.rel = rel
+					link.href = href
+					if (crossOrigin) link.crossOrigin = crossOrigin
+					head.appendChild(link)
+				} catch {
+					// ignore
+				}
+			}
+
+			const worker =
+				import.meta.env.VITE_WORKER_API_URL ||
+				import.meta.env.VITE_CLOUDFLARE_WORKER_URL ||
+				''
+			const supabase = import.meta.env.VITE_SUPABASE_URL || ''
+
+			const origins = [toOrigin(worker), toOrigin(supabase)].filter(Boolean)
+			for (const origin of origins) {
+				addLink('dns-prefetch', origin)
+				addLink('preconnect', origin, { crossOrigin: 'anonymous' })
+			}
+		</script>
 	</head>
 	<body>
 		<div id="root"></div>

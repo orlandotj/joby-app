@@ -23,10 +23,10 @@ allprojects {
         mavenCentral()
     }
     
-    // Forçar Java 17 em todos os projetos
+    // Forçar Java 21 em todos os projetos (Capacitor usa Java 21)
     tasks.withType(JavaCompile).configureEach {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
     }
 }
 

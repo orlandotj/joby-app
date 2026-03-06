@@ -1,6 +1,8 @@
-# Cloudflare Worker - Upload de Vídeos R2
+# Cloudflare Worker - R2 Vídeos + Anexos de Solicitação
 
-Worker serverless para fazer upload de vídeos no Cloudflare R2 e salvar metadados no Supabase.
+Worker serverless para:
+- Upload/stream de vídeos no Cloudflare R2
+- API de anexos de solicitações (`service-attachments`) usando Supabase Storage (bucket privado) + signed URLs
 
 ## 📋 Pré-requisitos
 
@@ -60,6 +62,24 @@ https://joby-r2-videos.<account>.workers.dev
 
 ## 📡 Endpoints
 
+### GET `/health`
+
+Retorna status e lista de rotas disponíveis. Use isso para validar se o Worker publicado está atualizado.
+
+### POST `/api/images/normalize`
+
+Normaliza imagens enviadas pelo app (fallback server-side quando a otimização client-side falha).
+
+- Auth: `Authorization: Bearer <supabase_jwt>`
+- Body: `multipart/form-data`
+  - `file` (obrigatório)
+  - `context` (obrigatório): `post_photo` | `profile_avatar` | `profile_cover` | `service_cover` | `chat_image`
+  - `target` (opcional): `webp` | `jpeg`
+
+Observações:
+- O limite varia por contexto (ex.: avatar pode ser menor do que outros contextos).
+- Use `/health` para confirmar se o Worker publicado já contém essa rota.
+
 ### POST `/upload-video`
 
 Upload de vídeo para R2 e salvar metadados no Supabase.
@@ -111,6 +131,31 @@ GET /video/videos/abc123/xyz789.mp4
 }
 ```
 
+### POST `/api/service-attachments/upload`
+
+Upload de anexo (imagem/vídeo) para uma solicitação de serviço.
+
+- Auth: `Authorization: Bearer <supabase_jwt>`
+- Body: `multipart/form-data`
+  - `requestId` (obrigatório)
+  - `file` (obrigatório)
+  - `caption` (opcional)
+
+Observações:
+- O Worker valida se o usuário autenticado é o `client_id` do `service_request`.
+- O arquivo vai para o Supabase Storage (bucket `photos`) em um path `service-attachments/...`.
+
+### POST `/api/service-attachments/signed-url`
+
+Gera uma signed URL temporária para baixar/visualizar o anexo.
+
+- Auth: `Authorization: Bearer <supabase_jwt>`
+- Body: JSON `{ "mediaId": "..." }`
+
+Observações:
+- O Worker valida permissão: `client_id` ou `professional_id` do request.
+- Retorna `{ signedUrl }` com expiração curta.
+
 ## 🔒 Segurança
 
 - ✅ CORS habilitado
@@ -126,3 +171,14 @@ GET /video/videos/abc123/xyz789.mp4
 - Campo `url` no banco armazena apenas o `r2_key` (não URL completa)
 - Status inicial: `ready` (R2 não precisa processamento)
 - **R2 não é público**: Todas as requisições de vídeo passam pelo Worker (proxy)
+
+## ✅ Dica de validação (evitar 404)
+
+Se você receber `404 {"error":"Not found"}` em `/api/service-attachments/...` ou `/api/images/normalize`, normalmente significa que o Worker publicado está desatualizado.
+
+1. Abra `https://<seu-worker>.workers.dev/health`
+2. Confirme que aparecem as rotas:
+  - `POST /api/images/normalize`
+  - `POST /api/service-attachments/upload`
+  - `POST /api/service-attachments/signed-url`
+3. Se não aparecer, rode o deploy novamente: `cd worker && npm run deploy`

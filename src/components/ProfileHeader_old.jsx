@@ -26,6 +26,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { useResolvedStorageUrl } from '@/lib/storageUrl'
+import { log } from '@/lib/logger'
 
 const ProfileHeader = ({
   user,
@@ -125,7 +126,7 @@ const ProfileHeader = ({
         onFollowChange()
       }
     } catch (error) {
-      console.error('Erro ao seguir/deixar de seguir:', error)
+      log.error('PROFILE', 'Erro ao seguir/deixar de seguir', error)
       toast({
         title: 'Erro',
         description: 'Não foi possível completar a ação.',

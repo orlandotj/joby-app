@@ -1,6 +1,6 @@
 import path from 'node:path'
 import react from '@vitejs/plugin-react'
-import { createLogger, defineConfig } from 'vite'
+import { createLogger, defineConfig, loadEnv } from 'vite'
 
 const getSafePostMessageTargetOrigin = `
 function __jobySafeTargetOrigin() {
@@ -131,10 +131,32 @@ window.fetch = function(...args) {
 				contentType.includes('application/xhtml+xml');
 
 			if (!response.ok && !isDocumentResponse) {
-					const responseClone = response.clone();
-					const errorFromRes = await responseClone.text();
 					const requestUrl = response.url;
-					console.error(\`Fetch error from \${requestUrl}: \${errorFromRes}\`);
+					// Reduce noise for optional endpoints during dev.
+					// NOTE: Avoid regex literals inside template strings (escape sequences like \b break the injected JS).
+					const shouldIgnore404 =
+						response.status === 404 &&
+						requestUrl &&
+						(requestUrl.includes('/api/service-attachments/signed-url') ||
+							requestUrl.includes('/api/service-attachments/upload'));
+
+					const isSupabaseRefreshTokenRequest =
+						requestUrl &&
+						requestUrl.includes('/auth/v1/token') &&
+						requestUrl.includes('grant_type=refresh_token');
+
+					if (!shouldIgnore404) {
+						const responseClone = response.clone();
+						const errorFromRes = await responseClone.text();
+						const shouldIgnoreRefreshTokenNotFound =
+							isSupabaseRefreshTokenRequest &&
+							response.status === 400 &&
+							errorFromRes &&
+							errorFromRes.includes('refresh_token_not_found');
+						if (!shouldIgnoreRefreshTokenNotFound) {
+							console.error(\`Fetch error from \${requestUrl}: \${errorFromRes}\`);
+						}
+					}
 			}
 
 			return response;
@@ -197,21 +219,43 @@ logger.error = (msg, options) => {
 
 export default defineConfig(({ command }) => {
   const isDev = command === 'serve'
-  return {
-    customLogger: logger,
-    plugins: [react(), ...(isDev ? [addTransformIndexHtml] : [])],
-    server: {
-      cors: true,
-      headers: {
-        'Cross-Origin-Embedder-Policy': 'credentialless',
-      },
-      allowedHosts: true,
-      host: '0.0.0.0',
-      port: 5173,
-			// Proxy para o Cloudflare Worker local (porta 8787).
-			// Isso permite que o frontend use URLs "normais" (mesma origem)
-			// inclusive quando acessado via IP da rede (ex: http://192.168.0.101:5173).
-			proxy: {
+
+	function isLocalHostname(hostname) {
+		return hostname === '127.0.0.1' || hostname === 'localhost'
+	}
+
+	function isLocalUrl(url) {
+		const raw = String(url || '').trim()
+		if (!raw) return false
+		try {
+			const u = new URL(raw)
+			return isLocalHostname(u.hostname)
+		} catch {
+			return false
+		}
+	}
+
+	// Se VITE_WORKER_API_URL estiver definido e NÃO for localhost/127, queremos usar o Worker publicado
+	// e evitar que o proxy do Vite force chamadas para 127.0.0.1.
+	const env = loadEnv(isDev ? 'development' : 'production', process.cwd(), '')
+	const workerUrl = String(env.VITE_WORKER_API_URL || env.VITE_CLOUDFLARE_WORKER_URL || '').trim()
+	const faststartUrl = String(env.VITE_FASTSTART_API_URL || '').trim()
+	const hasRemoteWorker = Boolean(workerUrl) && !isLocalUrl(workerUrl)
+	const hasRemoteFaststartServer = Boolean(faststartUrl) && !isLocalUrl(faststartUrl)
+
+	// Proxy local (dev): Worker (8787) e Faststart Server (8788) são independentes.
+	const proxy = {
+		...(!hasRemoteWorker
+			? {
+				// Keep these more specific routes pointing to the local Worker.
+				'/api/images': {
+					target: 'http://127.0.0.1:8787',
+					changeOrigin: true,
+				},
+				'/api/service-attachments': {
+					target: 'http://127.0.0.1:8787',
+					changeOrigin: true,
+				},
 				'/upload-video': {
 					target: 'http://127.0.0.1:8787',
 					changeOrigin: true,
@@ -224,8 +268,63 @@ export default defineConfig(({ command }) => {
 					target: 'http://127.0.0.1:8787',
 					changeOrigin: true,
 				},
-			},
+			}
+			: {}),
+		...(!hasRemoteFaststartServer
+			? {
+				// Proxy all /api calls to the Faststart server.
+				// Note: '/api/service-attachments' remains routed to the Worker above.
+				'/api': {
+					target: 'http://127.0.0.1:8788',
+					changeOrigin: true,
+				},
+			}
+			: {}),
+	}
+
+  return {
+    customLogger: logger,
+    plugins: [react(), ...(isDev ? [addTransformIndexHtml] : [])],
+    server: {
+      cors: true,
+      headers: {
+        'Cross-Origin-Embedder-Policy': 'credentialless',
+      },
+      allowedHosts: true,
+      host: '0.0.0.0',
+      port: 5173,
+			hmr: isDev
+				? {
+					protocol: 'ws',
+					// Importante: não force "localhost" aqui.
+					// Quando acessado via IP (ex.: 192.168.x.x) no celular,
+					// "localhost" aponta para o próprio celular e o HMR fica tentando reconectar.
+				}
+				: undefined,
+			// Proxy para o Cloudflare Worker local (porta 8787).
+			// Isso permite que o frontend use URLs "normais" (mesma origem)
+			// inclusive quando acessado via IP da rede (ex: http://192.168.0.101:5173).
+			proxy,
     },
+		build: {
+			rollupOptions: {
+				output: {
+					manualChunks(id) {
+						if (!id) return
+						if (!id.includes('node_modules')) return
+
+						// Keep big deps out of the main entry chunk.
+						if (id.includes('@supabase/')) return 'supabase'
+						if (id.includes('framer-motion')) return 'framer'
+						if (id.includes('@radix-ui/')) return 'radix'
+						if (id.includes('react-router')) return 'router'
+						if (id.includes('lucide-react')) return 'icons'
+
+						return 'vendor'
+					},
+				},
+			},
+		},
     resolve: {
       extensions: ['.jsx', '.js', '.tsx', '.ts', '.json'],
       alias: {

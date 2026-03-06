@@ -1,5 +1,7 @@
 # 🚀 Deploy do Cloudflare Worker - Upload de Vídeos R2
 
+Este Worker também expõe a API de anexos de solicitações (`/api/service-attachments/*`).
+
 ## 📋 Checklist Pré-Deploy
 
 - [ ] Wrangler CLI instalado
@@ -47,9 +49,9 @@ npm install
 
 | Tipo | Nome | Valor |
 |------|------|-------|
-| Secret | `SUPABASE_URL` | `https://zkmgjgostowsllmdrrjd.supabase.co` |
-| Secret | `SUPABASE_SERVICE_ROLE_KEY` | `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InprbWdqZ29zdG93c2xsbWRycmpkIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2NTc1OTc1OCwiZXhwIjoyMDgxMzM1NzU4fQ.uf3BuL95LjFsymn6Q6Ha5ddMkzK6xrVKbVb8pLa73Vo` |
-| Secret | `R2_ACCOUNT_ID` | `d527e6bb0b0350f8dc39481ebdc27398` |
+| Secret | `SUPABASE_URL` | sua URL do projeto (ex: `https://xxxxx.supabase.co`) |
+| Secret | `SUPABASE_SERVICE_ROLE_KEY` | sua `service_role` key do Supabase |
+| Secret | `R2_ACCOUNT_ID` | seu Account ID do Cloudflare |
 | Secret | `R2_PUBLIC_URL` | (opcional) URL pública customizada do R2 |
 
 **OU via CLI:**
@@ -57,13 +59,13 @@ npm install
 ```bash
 cd worker
 wrangler secret put SUPABASE_URL
-# Cole: https://zkmgjgostowsllmdrrjd.supabase.co
+# Cole sua URL (ex: https://xxxxx.supabase.co)
 
 wrangler secret put SUPABASE_SERVICE_ROLE_KEY
-# Cole: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InprbWdqZ29zdG93c2xsbWRycmpkIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2NTc1OTc1OCwiZXhwIjoyMDgxMzM1NzU4fQ.uf3BuL95LjFsymn6Q6Ha5ddMkzK6xrVKbVb8pLa73Vo
+# Cole sua service_role key (NUNCA no frontend)
 
 wrangler secret put R2_ACCOUNT_ID
-# Cole: d527e6bb0b0350f8dc39481ebdc27398
+# Cole seu Account ID do Cloudflare
 ```
 
 ### 6. Verificar R2 Bucket Binding
@@ -117,6 +119,15 @@ Execute o SQL em `migrate_videos_to_cloudflare.sql` no Supabase SQL Editor para 
 3. Verifique se o vídeo aparece no R2 bucket
 4. Verifique se os metadados foram salvos no Supabase
 
+Opcional (recomendado): valide as rotas publicadas do Worker:
+
+1. Acesse `https://joby-r2-videos.<account>.workers.dev/health`
+2. Confirme que aparecem as rotas:
+	- `POST /api/images/normalize`
+	- `POST /api/service-attachments/upload`
+	- `POST /api/service-attachments/signed-urls`
+	- `POST /api/service-attachments/signed-url`
+
 ## 🔍 Troubleshooting
 
 ### Erro: "Bucket not found"
@@ -130,6 +141,19 @@ Execute o SQL em `migrate_videos_to_cloudflare.sql` no Supabase SQL Editor para 
 ### Erro: CORS no frontend
 - O Worker já tem CORS configurado
 - Verifique se a URL do Worker está correta no `.env`
+
+### Erro: `404 Not found` em `/api/service-attachments/signed-url`
+- Isso quase sempre indica que o Worker publicado não está com a versão do código que contém essas rotas.
+- Rode `cd worker && npm run deploy` e valide novamente em `/health`.
+
+### Erro: `{"error":"Not found"}` em `/api/images/normalize`
+- Valide primeiro em `/health` se aparece `POST /api/images/normalize`.
+- Se não aparecer, o Worker publicado está desatualizado: rode `cd worker && npm run deploy`.
+- Se aparecer e mesmo assim falhar, valide se o frontend está apontando para o Worker certo (env `VITE_WORKER_API_URL` / `VITE_CLOUDFLARE_WORKER_URL`).
+
+### Ainda está lento para carregar thumbnails
+- Garanta que o Worker publicado mostra `POST /api/service-attachments/signed-urls` em `/health`.
+- Esse endpoint batch reduz drasticamente o número de chamadas para assinar URLs.
 
 ### Vídeo não aparece no feed
 - Verifique se a migração SQL foi executada

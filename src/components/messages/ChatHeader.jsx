@@ -2,6 +2,7 @@ import React from 'react'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { useResolvedStorageUrl } from '@/lib/storageUrl'
+import { getProfileDisplayName, getProfileInitial } from '@/lib/profileDisplay'
 import {
   MoreVertical,
   Briefcase,
@@ -26,6 +27,7 @@ import {
 
 const ChatHeader = ({
   user,
+  onViewProfile,
   onHireClick,
   onBack,
   onReportClick,
@@ -38,6 +40,8 @@ const ChatHeader = ({
   isMuted,
 }) => {
   const avatarSrc = useResolvedStorageUrl(user?.avatar)
+  const displayName = getProfileDisplayName(user)
+  const initial = getProfileInitial(user)
 
   return (
     <div className="p-3 sm:p-4 border-b border-border/50 flex items-center justify-between bg-card/95 backdrop-blur-sm">
@@ -53,20 +57,27 @@ const ChatHeader = ({
             <ArrowLeft size={20} />
           </Button>
         )}
-        <Avatar className="h-10 w-10 sm:h-12 sm:w-12 flex-shrink-0 ring-2 ring-primary/10">
-          <AvatarImage src={avatarSrc} alt={user.name} />
-          <AvatarFallback className="bg-primary text-primary-foreground text-sm font-medium">
-            {user.name.charAt(0)}
-          </AvatarFallback>
-        </Avatar>
-        <div className="min-w-0 flex-1">
-          <h3 className="font-semibold text-foreground truncate text-sm sm:text-base">
-            {user.name}
-          </h3>
-          <p className="text-xs sm:text-sm text-muted-foreground truncate">
-            {user.profession}
-          </p>
-        </div>
+        <button
+          type="button"
+          onClick={() => onViewProfile && user?.id && onViewProfile(user.id)}
+          className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1 text-left"
+          title="Ver perfil"
+        >
+          <Avatar className="h-10 w-10 sm:h-12 sm:w-12 flex-shrink-0 ring-2 ring-primary/10">
+            <AvatarImage src={avatarSrc} alt={displayName} />
+            <AvatarFallback className="bg-primary text-primary-foreground text-sm font-medium">
+              {initial}
+            </AvatarFallback>
+          </Avatar>
+          <div className="min-w-0 flex-1">
+            <h3 className="font-semibold text-foreground truncate text-sm sm:text-base">
+              {displayName}
+            </h3>
+            <p className="text-xs sm:text-sm text-muted-foreground truncate">
+              {user?.profession}
+            </p>
+          </div>
+        </button>
       </div>
 
       <div className="flex items-center gap-2 flex-shrink-0 ml-2">

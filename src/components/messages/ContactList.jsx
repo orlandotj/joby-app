@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { MessageSquare, User, Briefcase, Search } from 'lucide-react'
 import { useResolvedStorageUrl } from '@/lib/storageUrl'
+import { getProfileDisplayName, getProfileInitial } from '@/lib/profileDisplay'
 
 const ContactRow = ({
   conversation,
@@ -13,6 +14,8 @@ const ContactRow = ({
   onHireClick,
 }) => {
   const avatarSrc = useResolvedStorageUrl(conversation?.user?.avatar)
+  const displayName = getProfileDisplayName(conversation?.user)
+  const initial = getProfileInitial(conversation?.user)
 
   return (
     <div
@@ -26,9 +29,9 @@ const ContactRow = ({
           title="Ver perfil"
         >
           <Avatar className="h-11 w-11 sm:h-12 sm:w-12 ring-2 ring-transparent group-hover:ring-primary transition-all">
-            <AvatarImage src={avatarSrc} alt={conversation.user.name} />
+            <AvatarImage src={avatarSrc} alt={displayName} />
             <AvatarFallback className="bg-primary text-primary-foreground font-medium text-sm">
-              {conversation.user.name.charAt(0)}
+              {initial}
             </AvatarFallback>
           </Avatar>
           {conversation.user.online && (
@@ -44,7 +47,7 @@ const ContactRow = ({
       >
         <div className="flex items-center justify-between gap-2">
           <p className="font-medium text-foreground truncate text-sm sm:text-base flex-1">
-            {conversation.user.name}
+            {displayName}
           </p>
           <span className="text-xs text-muted-foreground flex-shrink-0 whitespace-nowrap ml-2">
             {conversation.timestamp}
@@ -96,9 +99,16 @@ const ContactList = ({
   const [searchTerm, setSearchTerm] = useState('')
 
   const filteredConversations = conversations.filter(
-    (conv) =>
-      conv.user.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      conv.lastMessage.toLowerCase().includes(searchTerm.toLowerCase())
+    (conv) => {
+      const term = String(searchTerm || '').toLowerCase()
+      const who = getProfileDisplayName(conv?.user)
+      const last = String(conv?.lastMessage || '')
+
+      return (
+        String(who || '').toLowerCase().includes(term) ||
+        String(last || '').toLowerCase().includes(term)
+      )
+    }
   )
   if (conversations.length === 0) {
     return (

@@ -8,7 +8,8 @@ export const TabTransition = ({
   className,
   children,
   distancePx = 18,
-  durationSec = 0.18,
+  durationSec = 0.12,
+  ...props
 } = {}) => {
   const reduceMotion = useReducedMotion()
   const prevIndexRef = useRef(-1)
@@ -56,7 +57,7 @@ export const TabTransition = ({
   }, [reduceMotion, durationSec])
 
   return (
-    <div className={cn('relative', className)}>
+    <div className={cn('relative', className)} {...props}>
       <AnimatePresence mode="wait" initial={false} custom={direction}>
         <motion.div
           key={String(value)}

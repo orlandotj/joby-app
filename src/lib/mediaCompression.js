@@ -4,6 +4,8 @@
  * @param {Object} options - Opções de compressão
  * @returns {Promise<File>} Arquivo comprimido
  */
+import { log } from '@/lib/logger'
+
 export const compressImage = async (file, options = {}) => {
   const {
     maxWidth = 1920,
@@ -92,9 +94,7 @@ export const compressVideo = async (file) => {
   // Por enquanto, apenas retorna o arquivo original
   // Compressão real de vídeo requer bibliotecas pesadas como ffmpeg.wasm
   if (import.meta.env.DEV) {
-    console.log(
-      'Video compression not implemented yet, returning original file'
-    )
+    log.debug('MEDIA', 'Video compression not implemented yet, returning original file')
   }
   return file
 }

@@ -40,20 +40,11 @@ import {
   subscribeToMessages,
 } from '@/services/messageService'
 
-// Para comentários e likes
-import {
-  addComment,
-  getVideoComments,
-  getPhotoComments,
-  deleteComment,
-  likeVideo,
-  unlikeVideo,
-  likePhoto,
-  unlikePhoto,
-  checkVideoLike,
-  checkPhotoLike,
-  subscribeToComments,
-} from '@/services/commentService'
+// Para comentários (inclui likes em comentários e realtime)
+import { useComments } from '@/hooks/useComments'
+
+// Para likes em vídeos/fotos (Like Global consistente)
+import { useLikes } from '@/contexts/LikesContext'
 ```
 
 ### Exemplo: Enviar Mensagem Simples
@@ -106,19 +97,39 @@ const handleSendWithAttachment = async (file) => {
 ### Exemplo: Adicionar Comentário
 
 ```javascript
-const handleAddComment = async () => {
-  const { data, error } = await addComment({
-    videoId: 'uuid-do-video', // OU photoId: 'uuid-da-foto'
-    content: 'Adorei esse vídeo!',
+const CommentsExample = ({ contentId, contentType }) => {
+  const { comments, postComment, toggleLike: toggleCommentLike } = useComments({
+    contentId,
+    contentType, // 'video' | 'photo'
+    enabled: true,
   })
 
-  if (error) {
-    console.error('Erro:', error)
-  } else {
-    console.log('Comentário adicionado:', data)
-    // data inclui: id, user_id, video_id/photo_id, text, created_at, user{name, avatar}
+  const handleAddComment = async () => {
+    const { error } = await postComment({ content: 'Adorei esse conteúdo!' })
+    if (error) console.error('Erro:', error)
   }
+
+  return null
 }
+```
+
+### Exemplo: Dar Like (vídeo/foto)
+
+```javascript
+const LikeExample = ({ contentId, contentType }) => {
+  const likes = useLikes()
+
+  const isLiked = likes.isLiked(contentType, contentId)
+  const count = likes.getCount(contentType, contentId) // number | null
+
+  const handleToggle = async () => {
+    const { error } = await likes.toggleLike(contentType, contentId)
+    if (error) console.error('Erro ao curtir:', error)
+  }
+
+  return null
+}
+```
 ```
 
 ### Exemplo: Dar Like em Vídeo
@@ -300,5 +311,6 @@ Para mais detalhes, veja:
 
 - `IMPLEMENTACAO_MENSAGENS.md` - Guia completo
 - `src/services/messageService.js` - Código fonte
-- `src/services/commentService.js` - Código fonte
+- `src/lib/commentApi.js` e `src/hooks/useComments.js` - Comentários e likes em comentários
+- `src/contexts/LikesContext.jsx` - Likes global (vídeo/foto)
 - `src/components/ContentViewModal.jsx` - Exemplo de implementação

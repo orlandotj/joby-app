@@ -1,6 +1,7 @@
 import React from "react";
 import * as AvatarPrimitive from "@radix-ui/react-avatar";
 import { cn } from "@/lib/utils";
+import { useResolvedStorageUrl } from "@/lib/storageUrl";
 
 const Avatar = React.forwardRef(({ className, ...props }, ref) => (
   <AvatarPrimitive.Root
@@ -14,13 +15,19 @@ const Avatar = React.forwardRef(({ className, ...props }, ref) => (
 ));
 Avatar.displayName = AvatarPrimitive.Root.displayName;
 
-const AvatarImage = React.forwardRef(({ className, ...props }, ref) => (
-  <AvatarPrimitive.Image
-    ref={ref}
-    className={cn("aspect-square h-full w-full", className)}
-    {...props}
-  />
-));
+const AvatarImage = React.forwardRef(({ className, src, ...props }, ref) => {
+  const resolvedSrc = useResolvedStorageUrl(src, { debugLabel: "avatar" });
+  const finalSrc = typeof resolvedSrc === "string" && resolvedSrc.trim() ? resolvedSrc : undefined;
+
+  return (
+    <AvatarPrimitive.Image
+      ref={ref}
+      src={finalSrc}
+      className={cn("aspect-square h-full w-full", className)}
+      {...props}
+    />
+  );
+});
 AvatarImage.displayName = AvatarPrimitive.Image.displayName;
 
 const AvatarFallback = React.forwardRef(

@@ -1,16 +1,19 @@
 import React from 'react'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { useResolvedStorageUrl } from '@/lib/storageUrl'
+import { getProfileDisplayName, getProfileInitial } from '@/lib/profileDisplay'
 
 const TypingIndicator = ({ user }) => {
   const avatarSrc = useResolvedStorageUrl(user?.avatar)
+  const displayName = getProfileDisplayName(user)
+  const initial = getProfileInitial(user)
 
   return (
     <div className="flex items-center gap-2 mb-4 animate-in fade-in slide-in-from-left-2">
       <Avatar className="h-8 w-8">
-        <AvatarImage src={avatarSrc} alt={user?.name} />
+        <AvatarImage src={avatarSrc} alt={displayName} />
         <AvatarFallback className="bg-muted text-xs">
-          {user?.name?.charAt(0)?.toUpperCase() || '?'}
+          {initial}
         </AvatarFallback>
       </Avatar>
       <div className="bg-card border border-border/50 rounded-2xl rounded-bl-none px-4 py-3 shadow-sm">

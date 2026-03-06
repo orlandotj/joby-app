@@ -49,15 +49,21 @@ Funções para:
 - 👀 Marcar como lido
 - 🔔 Tempo real (realtime subscriptions)
 
-### 2. `src/services/commentService.js`
+### 2. Comentários e Likes (novo padrão)
 
-Funções para:
+Arquivos:
+
+- `src/lib/commentApi.js`
+- `src/hooks/useComments.js`
+- `src/contexts/LikesContext.jsx` (likes em vídeos/fotos)
+
+Comentários (inclui likes em comentários) oferece:
 
 - 💬 Adicionar comentários
-- 👍 Dar likes em fotos/vídeos
 - 🗑️ Deletar comentários
 - ✏️ Editar comentários
-- 🔔 Tempo real para novos comentários
+
+Likes em **vídeos/fotos** seguem o padrão de Like Global consistente via `LikesContext`.
 
 ## 🔧 Como usar nos componentes:
 
@@ -114,33 +120,35 @@ console.log('Mensagem com anexo enviada:', data)
 ### Exemplo 3: Adicionar comentário
 
 \`\`\`javascript
-import { addComment } from '@/services/commentService'
+import { useComments } from '@/hooks/useComments'
 
-const handleComment = async () => {
-const { data, error } = await addComment({
-videoId: 'uuid-do-video', // OU photoId: 'uuid-da-foto'
-content: 'Muito bom!'
-})
+const Example = ({ contentId, contentType }) => {
+	const { postComment } = useComments({ contentId, contentType, enabled: true })
 
-if (error) {
-console.error('Erro:', error)
-} else {
-console.log('Comentário adicionado:', data)
-}
+	const handleComment = async () => {
+		const { error } = await postComment({ content: 'Muito bom!' })
+		if (error) console.error('Erro:', error)
+	}
+
+	return null
 }
 \`\`\`
 
 ### Exemplo 4: Dar like
 
 \`\`\`javascript
-import { likeVideo, unlikeVideo } from '@/services/commentService'
+import { useLikes } from '@/contexts/LikesContext'
 
-const handleLike = async (videoId, isLiked) => {
-if (isLiked) {
-await unlikeVideo(videoId)
-} else {
-await likeVideo(videoId)
-}
+const Example = ({ contentId, contentType }) => {
+	const likes = useLikes()
+	const isLiked = likes.isLiked(contentType, contentId)
+
+	const handleLike = async () => {
+		const { error } = await likes.toggleLike(contentType, contentId)
+		if (error) console.error('Erro:', error)
+	}
+
+	return null
 }
 \`\`\`
 
@@ -193,7 +201,7 @@ Para anexos funcionarem, configure o bucket no Supabase:
 
 1. Vá em **Storage** no Supabase
 2. O bucket `photos` já deve existir
-3. Adicione política para `message-attachments`:
+3. Adicione policy para `message-attachments` (modo recomendado: "pra sempre" via signed URL sob demanda):
 
 \`\`\`sql
 -- Permitir upload
@@ -202,10 +210,10 @@ ON storage.objects FOR INSERT
 TO authenticated
 WITH CHECK (bucket_id = 'photos' AND (storage.foldername(name))[1] = 'message-attachments');
 
--- Permitir leitura
-CREATE POLICY "Anyone can view attachments"
+-- Permitir leitura (usuários autenticados)
+CREATE POLICY "Authenticated users can read attachments"
 ON storage.objects FOR SELECT
-TO public
+TO authenticated
 USING (bucket_id = 'photos' AND (storage.foldername(name))[1] = 'message-attachments');
 \`\`\`
 

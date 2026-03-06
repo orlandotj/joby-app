@@ -38,11 +38,14 @@ import {
   archiveNotification,
   deleteNotification,
   markNotificationRead,
+  markAllNotificationsRead,
+  createNotification,
   subscribeToNotifications,
 } from '@/services/notificationService'
 import { supabase } from '@/lib/supabaseClient'
 import { useResolvedStorageUrl } from '@/lib/storageUrl'
 import { getProfileDisplayName } from '@/lib/profileDisplay'
+import { log } from '@/lib/logger'
 import { useSwipeTabs } from '@/hooks/useSwipeTabs'
 import { SwipeTabsList } from '@/components/SwipeTabs'
 import { TabTransition } from '@/components/TabTransition'
@@ -185,9 +188,11 @@ const Notifications = () => {
 
   const [actionTarget, setActionTarget] = useState(null)
   const [actionOpen, setActionOpen] = useState(false)
+  const [confirmingId, setConfirmingId] = useState(null)
 
   const mountedRef = useRef(false)
   const loadSeqRef = useRef(0)
+  const didAutoMarkAllRef = useRef(false)
 
   const TAB_ORDER = ['all', 'unread', 'archived']
   const swipeTabs = useSwipeTabs({
@@ -215,7 +220,7 @@ const Notifications = () => {
       if (seq !== loadSeqRef.current) return
       setItems(data)
     } catch (error) {
-      console.error('Erro ao carregar notificações:', error)
+      log.error('NOTIF', 'Erro ao carregar notificações', error)
       if (!mountedRef.current) return
       if (seq !== loadSeqRef.current) return
       setItems([])
@@ -233,7 +238,9 @@ const Notifications = () => {
     } finally {
       if (!mountedRef.current) return
       if (seq !== loadSeqRef.current) return
-      if (!silent) setLoading(false)
+      // Mesmo em modo silencioso, se este foi o último load resolvido,
+      // garantimos que o skeleton não fique preso.
+      setLoading(false)
     }
   }
 
@@ -252,6 +259,28 @@ const Notifications = () => {
         userId,
         onChange: () => load({ silent: true }),
       })
+
+      // Comportamento tipo Instagram/Facebook: ao abrir a tela,
+      // marca como lidas (limpa badge) sem precisar clicar uma a uma.
+      ;(async () => {
+        try {
+          if (didAutoMarkAllRef.current) return
+          didAutoMarkAllRef.current = true
+
+          await markAllNotificationsRead(userId)
+
+          // Atualiza UI imediatamente: no "Não lidas" elas somem.
+          setItems((prev) => {
+            const next = prev.map((x) => (x?.is_read ? x : { ...x, is_read: true }))
+            return activeTab === 'unread' ? [] : next
+          })
+
+          // Recarrega em background para garantir consistência (principalmente sem realtime).
+          load({ silent: true })
+        } catch (_e) {
+          // ignore
+        }
+      })()
 
       return () => sub?.unsubscribe?.()
     }
@@ -272,9 +301,10 @@ const Notifications = () => {
     try {
       if (!n.is_read) {
         await markNotificationRead({ id: n.id, userId })
-        setItems((prev) =>
-          prev.map((x) => (x.id === n.id ? { ...x, is_read: true } : x))
-        )
+        setItems((prev) => {
+          if (activeTab === 'unread') return prev.filter((x) => x.id !== n.id)
+          return prev.map((x) => (x.id === n.id ? { ...x, is_read: true } : x))
+        })
       }
     } catch (_e) {
       // ignore
@@ -321,13 +351,21 @@ const Notifications = () => {
     if (n.is_read) return
 
     // optimistic
-    setItems((prev) => prev.map((x) => (x.id === n.id ? { ...x, is_read: true } : x)))
+    setItems((prev) => {
+      if (activeTab === 'unread') return prev.filter((x) => x.id !== n.id)
+      return prev.map((x) => (x.id === n.id ? { ...x, is_read: true } : x))
+    })
     try {
       await markNotificationRead({ id: n.id, userId })
     } catch (e) {
       // rollback
-      setItems((prev) => prev.map((x) => (x.id === n.id ? { ...x, is_read: false } : x)))
-      console.error('Erro ao marcar como lida:', e)
+      setItems((prev) => {
+        // Se estava na aba "Não lidas", a notificação pode ter sido removida.
+        // Recarrega silencioso pra recuperar a lista correta.
+        load({ silent: true })
+        return prev
+      })
+      log.error('NOTIF', 'Erro ao marcar como lida', e)
     }
   }
 
@@ -355,7 +393,7 @@ const Notifications = () => {
           return next
         })
       }
-      console.error('Erro ao arquivar notificação:', e)
+      log.error('NOTIF', 'Erro ao arquivar notificação', e)
     }
   }
 
@@ -383,7 +421,7 @@ const Notifications = () => {
           return next
         })
       }
-      console.error('Erro ao desarquivar notificação:', e)
+      log.error('NOTIF', 'Erro ao desarquivar notificação', e)
     }
   }
 
@@ -411,7 +449,89 @@ const Notifications = () => {
           return next
         })
       }
-      console.error('Erro ao apagar notificação:', e)
+      log.error('NOTIF', 'Erro ao apagar notificação', e)
+    }
+  }
+
+  const isWorkTimerStart = (n) => String(n?.data?.kind || '') === 'work_timer_started'
+
+  const handleConfirmWorkTimerStart = async (n) => {
+    if (!n || !userId) return
+    if (!isWorkTimerStart(n)) return
+    if (n?.data?.confirmed_at) return
+
+    const professionalId = n?.data?.professional_id
+    const bookingId = n?.data?.booking_id
+    const nowIso = new Date().toISOString()
+
+    setConfirmingId(n.id)
+    try {
+      // 1) Update current notification with confirmation timestamp (if schema allows)
+      let updated = false
+      try {
+        const payload = {
+          is_read: true,
+          read_at: nowIso,
+          data: {
+            ...(n?.data || {}),
+            confirmed_at: nowIso,
+            confirmed_by: userId,
+          },
+        }
+        const { error } = await supabase
+          .from('notifications')
+          .update(payload)
+          .eq('id', n.id)
+          .eq('user_id', userId)
+
+        if (!error) updated = true
+      } catch (_e) {
+        // ignore
+      }
+
+      if (!updated) {
+        // Fallback: at least mark it as read
+        try {
+          await markNotificationRead({ id: n.id, userId })
+        } catch (_e) {
+          // ignore
+        }
+      }
+
+      // 2) Notify professional for audit trail
+      if (professionalId) {
+        await createNotification({
+          userId: professionalId,
+          type: 'work_request',
+          title: 'Início confirmado',
+          body: 'O cliente confirmou o início do turno. (Registro)',
+          actionUrl: n?.action_url || (bookingId ? `/work-timer/${bookingId}` : null),
+          bookingId,
+          data: {
+            kind: 'work_timer_start_confirmed',
+            booking_id: bookingId,
+            client_id: userId,
+            confirmed_at: nowIso,
+          },
+        })
+      }
+
+      // 3) Update UI
+      setItems((prev) =>
+        (prev || []).map((x) =>
+          x.id === n.id
+            ? {
+                ...x,
+                is_read: true,
+                data: { ...(x?.data || {}), confirmed_at: nowIso, confirmed_by: userId },
+              }
+            : x
+        )
+      )
+    } catch (e) {
+      log.error('NOTIF', 'Erro ao confirmar início do turno', e)
+    } finally {
+      setConfirmingId(null)
     }
   }
 
@@ -446,10 +566,15 @@ const Notifications = () => {
 
     const fetchProfiles = async (ids) => {
       const attempts = [
-        'id,username,full_name,nome,name,avatar',
-        'id,username,full_name,nome,avatar',
         'id,username,name,avatar',
+        'id,username,full_name,avatar',
+        'id,username,display_name,avatar',
+        'id,username,name,avatar_url',
+        'id,username,full_name,avatar_url',
+        'id,username,display_name,avatar_url',
         'id,username,avatar',
+        'id,username,avatar_url',
+        'id,username',
       ]
 
       for (const select of attempts) {
@@ -459,7 +584,11 @@ const Notifications = () => {
         const msg = String(error?.message || error)
         const isMissingColumn =
           msg.toLowerCase().includes('column') && msg.toLowerCase().includes('does not exist')
-        if (!isMissingColumn) throw error
+        const code = String(error?.code || '')
+        const status = Number(error?.status || error?.statusCode || 0)
+        const isPermissionDenied =
+          code === '42501' || status === 403 || msg.toLowerCase().includes('permission denied') || msg.toLowerCase().includes('insufficient privilege')
+        if (!isMissingColumn && !isPermissionDenied) throw error
       }
 
       return []
@@ -477,14 +606,14 @@ const Notifications = () => {
             next[String(p.id)] = {
               ...p,
               name: getProfileDisplayName(p),
-              avatar: p?.avatar || '',
+              avatar: p?.avatar || p?.avatar_url || '',
             }
           }
           return next
         })
       } catch (e) {
         // não bloquear a tela se não conseguir buscar perfis
-        console.warn('Erro ao buscar perfis dos atores:', e)
+        log.warn('NOTIF', 'Erro ao buscar perfis dos atores', e)
       }
     })()
 
@@ -606,6 +735,29 @@ const Notifications = () => {
               <div className="mt-2 text-xs text-muted-foreground">
                 {n.created_at ? formatWhen(n.created_at) : ''}
               </div>
+
+              {isWorkTimerStart(n) && !n?.data?.confirmed_at ? (
+                <div className="mt-3">
+                  <Button
+                    size="sm"
+                    className="h-9 rounded-xl"
+                    disabled={confirmingId === n.id}
+                    onClick={(e) => {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      handleConfirmWorkTimerStart(n)
+                    }}
+                  >
+                    {confirmingId === n.id ? 'Confirmando...' : 'Confirmar início'}
+                  </Button>
+                </div>
+              ) : null}
+
+              {isWorkTimerStart(n) && n?.data?.confirmed_at ? (
+                <div className="mt-3 text-xs text-muted-foreground">
+                  Início confirmado
+                </div>
+              ) : null}
             </div>
           </div>
         </Card>

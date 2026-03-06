@@ -33,11 +33,29 @@ import {
   Mail,
   Phone,
 } from 'lucide-react'
+import { log } from '@/lib/logger'
 
 const Settings = () => {
   const { user, logout } = useAuth()
   const { themeMode, setTheme } = useTheme()
   const navigate = useNavigate()
+
+  const navDebugLog = (to, reason) => {
+    if (import.meta.env.DEV !== true) return
+    const dest = String(to || '')
+    if (!dest) return
+    if (!dest.startsWith('/me/edit') && !dest.startsWith('/login')) return
+    try {
+      log.debug('NAV', dest, reason, new Error().stack)
+    } catch {
+      // ignore
+    }
+  }
+
+  const navigateWithReason = (to, { reason, ...opts } = {}) => {
+    navDebugLog(to, reason)
+    navigate(to, opts)
+  }
 
   // Estados para switches
   const [emergencyMode, setEmergencyMode] = useState(false)
@@ -54,7 +72,7 @@ const Settings = () => {
 
   const handleLogout = () => {
     logout()
-    navigate('/login')
+    navigateWithReason('/login', { reason: 'settings:logout' })
   }
 
   return (
@@ -72,7 +90,7 @@ const Settings = () => {
           </div>
 
           <Button
-            onClick={() => navigate('/me/edit')}
+            onClick={() => navigateWithReason('/me/edit', { reason: 'settings:edit_profile' })}
             className="w-full justify-between bg-primary hover:bg-primary/90"
           >
             <span>Editar Perfil</span>

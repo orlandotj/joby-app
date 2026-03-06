@@ -1,11 +1,34 @@
 import { supabase } from '@/lib/supabaseClient'
 
+const emitNotificationsChanged = () => {
+  try {
+    if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+      window.dispatchEvent(new CustomEvent('notifications:changed'))
+    }
+  } catch (_e) {
+    // ignore
+  }
+}
+
 const isMissingColumnError = (error, columnName) => {
   const code = String(error?.code || '')
   const msg = String(error?.message || error || '')
   if (code === '42703') return true
   const lower = msg.toLowerCase()
   return lower.includes('column') && lower.includes('does not exist') && lower.includes(String(columnName).toLowerCase())
+}
+
+const isRlsOrPermissionError = (error) => {
+  const code = String(error?.code || '')
+  const msg = String(error?.message || error || '').toLowerCase()
+  if (code === '42501') return true // insufficient_privilege / RLS
+  if (code === '401' || code === '403') return true
+  return (
+    msg.includes('row-level security') ||
+    msg.includes('rls') ||
+    msg.includes('permission denied') ||
+    msg.includes('not allowed')
+  )
 }
 
 const isRealtimeEnabled = () => {
@@ -72,9 +95,10 @@ export const getUnreadNotificationsCount = async (userId) => {
 
   const base = supabase
     .from('notifications')
-    .select('id', { head: true, count: 'exact' })
+    .select('id', { count: 'exact' })
     .eq('user_id', userId)
     .eq('is_read', false)
+    .range(0, 0)
 
   const res1 = await base.is('archived_at', null)
   if (!res1.error) return res1.count || 0
@@ -102,6 +126,8 @@ export const archiveNotification = async ({ id, userId, archived = true } = {}) 
     .eq('user_id', userId)
 
   if (error) throw error
+
+  emitNotificationsChanged()
 }
 
 export const deleteNotification = async ({ id, userId } = {}) => {
@@ -114,6 +140,8 @@ export const deleteNotification = async ({ id, userId } = {}) => {
     .eq('user_id', userId)
 
   if (error) throw error
+
+  emitNotificationsChanged()
 }
 
 export const markNotificationRead = async ({ id, userId } = {}) => {
@@ -126,6 +154,8 @@ export const markNotificationRead = async ({ id, userId } = {}) => {
     .eq('user_id', userId)
 
   if (error) throw error
+
+  emitNotificationsChanged()
 }
 
 export const markAllNotificationsRead = async (userId) => {
@@ -138,6 +168,39 @@ export const markAllNotificationsRead = async (userId) => {
     .eq('is_read', false)
 
   if (error) throw error
+
+  emitNotificationsChanged()
+}
+
+export const markNotificationsReadByType = async ({ userId, type } = {}) => {
+  if (!userId || !type || type === 'all') return
+
+  const payload = { is_read: true, read_at: new Date().toISOString() }
+
+  const base = () =>
+    supabase
+      .from('notifications')
+      .update(payload)
+      .eq('user_id', userId)
+      .eq('type', type)
+      .eq('is_read', false)
+
+  // Tentativa 1: schema com archived_at (não mexer nas arquivadas)
+  const res1 = await base().is('archived_at', null)
+  if (!res1.error) {
+    emitNotificationsChanged()
+    return
+  }
+
+  // Fallback: schema antigo sem archived_at
+  if (isMissingColumnError(res1.error, 'archived_at')) {
+    const res2 = await base()
+    if (res2.error) throw res2.error
+    emitNotificationsChanged()
+    return
+  }
+
+  throw res1.error
 }
 
 export const createTestNotifications = async ({ userId, count = 12 } = {}) => {
@@ -188,6 +251,98 @@ export const createTestNotifications = async ({ userId, count = 12 } = {}) => {
 
   const { error } = await supabase.from('notifications').insert(rows)
   if (error) throw error
+}
+
+export const createNotification = async ({
+  userId,
+  type = 'system',
+  title = '',
+  body = '',
+  actionUrl = null,
+  data = null,
+  bookingId = null,
+} = {}) => {
+  if (!userId) return
+
+  const baseRow = {
+    user_id: userId,
+    type,
+    title,
+    body,
+    is_read: false,
+  }
+
+  const candidates = [
+    {
+      ...baseRow,
+      action_url: actionUrl,
+      data,
+    },
+    {
+      ...baseRow,
+      action_url: actionUrl,
+    },
+    {
+      ...baseRow,
+      data,
+    },
+    {
+      ...baseRow,
+    },
+  ]
+
+  let lastError = null
+  let permissionBlocked = false
+  for (const row of candidates) {
+    const clean = { ...row }
+    Object.keys(clean).forEach((k) => clean[k] == null && delete clean[k])
+    const res = await supabase.from('notifications').insert([clean])
+    if (!res.error) {
+      emitNotificationsChanged()
+      return
+    }
+    lastError = res.error
+    if (String(res.error?.code || '') === '42703') {
+      // schema drift (missing column) -> try next candidate
+      continue
+    }
+
+    if (isRlsOrPermissionError(res.error)) {
+      permissionBlocked = true
+    }
+    break
+  }
+
+  // If inserts are blocked by RLS (default setup), try RPC that validates booking ownership.
+  if (permissionBlocked && bookingId) {
+    try {
+      const rpcRes = await supabase.rpc('create_notification_for_booking', {
+        p_booking_id: bookingId,
+        p_to_user_id: userId,
+        p_type: type,
+        p_title: title,
+        p_body: body,
+        p_data: data || {},
+        p_action_url: actionUrl,
+      })
+
+      if (!rpcRes.error) {
+        emitNotificationsChanged()
+        return
+      }
+
+      lastError = rpcRes.error
+    } catch (e) {
+      lastError = e
+    }
+  }
+
+  // Notifications should never break the main UX. If RLS/permissions block inserts,
+  // treat it as a non-fatal no-op.
+  if (lastError) {
+    if (permissionBlocked && isRlsOrPermissionError(lastError)) return
+    throw lastError
+  }
 }
 
 export const subscribeToNotifications = ({ userId, onChange } = {}) => {

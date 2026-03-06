@@ -2,9 +2,12 @@ import React from 'react'
 import { Link } from 'react-router-dom'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { useResolvedStorageUrl } from '@/lib/storageUrl'
+import { getProfileDisplayName, getProfileInitial } from '@/lib/profileDisplay'
 
 const ConversationRow = ({ conversation, isActive, onSelectConversation }) => {
   const avatarSrc = useResolvedStorageUrl(conversation?.user?.avatar)
+  const displayName = getProfileDisplayName(conversation?.user)
+  const initial = getProfileInitial(conversation?.user)
 
   return (
     <div
@@ -19,9 +22,9 @@ const ConversationRow = ({ conversation, isActive, onSelectConversation }) => {
         onClick={(e) => e.stopPropagation()}
       >
         <Avatar className="group-hover:scale-105 transition-transform">
-          <AvatarImage src={avatarSrc} alt={conversation.user.name} />
+          <AvatarImage src={avatarSrc} alt={displayName} />
           <AvatarFallback className="bg-primary text-primary-foreground">
-            {conversation.user.name.charAt(0)}
+            {initial}
           </AvatarFallback>
         </Avatar>
         {conversation.user.online && (
@@ -36,7 +39,7 @@ const ConversationRow = ({ conversation, isActive, onSelectConversation }) => {
             className="font-medium truncate text-foreground hover:text-primary transition-colors"
             onClick={(e) => e.stopPropagation()}
           >
-            {conversation.user.name}
+            {displayName}
           </Link>
           <span className="text-xs text-muted-foreground">
             {conversation.timestamp}

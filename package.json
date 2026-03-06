@@ -4,12 +4,17 @@
   "version": "0.0.0",
   "private": true,
   "scripts": {
-    "dev": "npm run dev:full",
+    "dev": "vite",
+    "dev:lan": "vite --host 0.0.0.0 --port 5173",
     "dev:web": "vite",
+    "dev:server": "npm --prefix server run dev",
     "dev:worker": "npm --prefix worker run dev",
-    "dev:full": "concurrently -n WEB,WORKER -c green,blue \"npm run dev:web\" \"npm run dev:worker\"",
+    "dev:full": "concurrently -n WEB,WORKER,SERVER -c green,blue,magenta \"npm run dev:web\" \"npm run dev:worker\" \"npm run dev:server\"",
+    "dev:local": "npm run dev:full",
     "build": "vite build",
     "preview": "vite preview",
+    "preview:lan": "vite preview --host 0.0.0.0 --port 4173",
+    "build:preview:lan": "npm run build && npm run preview:lan",
     "check-secrets": "node scripts/check-secrets.cjs",
     "prepare": "husky install"
   },
@@ -33,10 +38,13 @@
     "clsx": "^2.0.0",
     "date-fns": "^3.0.6",
     "framer-motion": "^10.16.4",
+    "heic2any": "^0.0.4",
+    "leaflet": "^1.9.4",
     "lucide-react": "^0.285.0",
     "node-fetch": "^3.3.2",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
+    "react-leaflet": "^4.2.1",
     "react-router-dom": "^6.16.0",
     "tailwind-merge": "^1.14.0",
     "tailwindcss-animate": "^1.0.7"
@@ -52,10 +60,10 @@
     "concurrently": "^9.1.2",
     "eslint": "^8.57.1",
     "eslint-config-react-app": "^7.0.1",
+    "husky": "^8.0.3",
     "postcss": "^8.4.31",
     "tailwindcss": "^3.3.3",
     "terser": "^5.39.0",
-    "vite": "^4.4.5",
-    "husky": "^8.0.3"
+    "vite": "^4.4.5"
   }
 }

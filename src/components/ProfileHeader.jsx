@@ -27,6 +27,8 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { useResolvedStorageUrl } from '@/lib/storageUrl'
+import { log } from '@/lib/logger'
+import { preloadImage, isImageCached } from '@/lib/imagePreloadCache'
 
 const ProfileHeader = ({
   user,
@@ -43,7 +45,9 @@ const ProfileHeader = ({
   const navigate = useNavigate()
 
   const [localUser, setLocalUser] = useState(user)
-  const [followingStatus, setFollowingStatus] = useState(initialIsFollowing)
+  const [followingStatus, setFollowingStatus] = useState(
+    initialIsFollowing == null ? null : !!initialIsFollowing
+  )
   const [localFollowersCount, setLocalFollowersCount] = useState(followersCount)
 
   const debugOnRef = useRef(false)
@@ -64,10 +68,72 @@ const ProfileHeader = ({
     debugLabel: `profileHeader:${localUser?.id}:cover`,
   })
 
+  const [avatarRenderSrc, setAvatarRenderSrc] = useState(null)
+  const [coverRenderSrc, setCoverRenderSrc] = useState(null)
+
+  useEffect(() => {
+    let mounted = true
+
+    if (!avatarSrc) {
+      setAvatarRenderSrc(null)
+      return () => {
+        mounted = false
+      }
+    }
+
+    if (isImageCached(avatarSrc)) {
+      setAvatarRenderSrc(avatarSrc)
+      return () => {
+        mounted = false
+      }
+    }
+
+    setAvatarRenderSrc(null)
+    preloadImage(avatarSrc)
+      .then(() => {
+        if (mounted) setAvatarRenderSrc(avatarSrc)
+      })
+      .catch(() => {})
+
+    return () => {
+      mounted = false
+    }
+  }, [avatarSrc])
+
+  useEffect(() => {
+    let mounted = true
+
+    if (!coverImageSrc) {
+      setCoverRenderSrc(null)
+      return () => {
+        mounted = false
+      }
+    }
+
+    if (isImageCached(coverImageSrc)) {
+      setCoverRenderSrc(coverImageSrc)
+      return () => {
+        mounted = false
+      }
+    }
+
+    setCoverRenderSrc(null)
+    preloadImage(coverImageSrc)
+      .then(() => {
+        if (mounted) setCoverRenderSrc(coverImageSrc)
+      })
+      .catch(() => {})
+
+    return () => {
+      mounted = false
+    }
+  }, [coverImageSrc])
+
   useEffect(() => {
     if (!debugOnRef.current) return
-    console.log(
-      `[IMG] ProfileHeader urls user=${localUser?.id} avatar=${String(avatarSrc).substring(
+    log.debug(
+      'IMG',
+      `ProfileHeader urls user=${localUser?.id} avatar=${String(avatarSrc).substring(
         0,
         90
       )}... cover=${String(coverImageSrc).substring(0, 90)}... t=${performance
@@ -77,12 +143,25 @@ const ProfileHeader = ({
   }, [avatarSrc, coverImageSrc, localUser?.id])
 
   useEffect(() => {
-    setFollowingStatus(initialIsFollowing)
+    setLocalUser(user)
+  }, [user?.id])
+
+  useEffect(() => {
+    setFollowingStatus(initialIsFollowing == null ? null : !!initialIsFollowing)
   }, [initialIsFollowing])
 
   useEffect(() => {
     setLocalFollowersCount(followersCount)
   }, [followersCount])
+
+  const followLoading = !isOwnProfile && followingStatus == null
+
+  const CounterValue = ({ value }) =>
+    value == null ? (
+      <span className="inline-block w-7 h-3 rounded bg-muted animate-pulse align-middle" />
+    ) : (
+      value
+    )
 
   const handleAvatarChange = (newAvatarUrl) => {
     setLocalUser((prev) => ({ ...prev, avatar: newAvatarUrl }))
@@ -157,7 +236,7 @@ const ProfileHeader = ({
         onFollowChange()
       }
     } catch (error) {
-      console.error('Erro ao seguir/deixar de seguir:', error)
+      log.error('PROFILE', 'Erro ao seguir/deixar de seguir', error)
       toast({
         title: 'Erro',
         description: 'Não foi possível completar a ação.',
@@ -197,17 +276,21 @@ const ProfileHeader = ({
           {isOwnProfile ? (
             <EditableCoverImage
               initialCoverImage={localUser.coverImage || localUser.cover_image}
-              coverSrc={coverImageSrc}
+              coverSrc={coverRenderSrc}
               onCoverImageChange={handleCoverImageChange}
               userName={localUser.name}
             />
           ) : localUser.coverImage || localUser.cover_image ? (
-            <img
-              alt={`Imagem de capa do perfil de ${localUser.name}`}
-              className="w-full h-full object-cover mix-blend-overlay opacity-70"
-              src={coverImageSrc}
-              loading="eager"
-            />
+            coverRenderSrc ? (
+              <img
+                alt={`Imagem de capa do perfil de ${localUser.name}`}
+                className="w-full h-full object-cover mix-blend-overlay opacity-70"
+                src={coverRenderSrc}
+                loading="eager"
+              />
+            ) : (
+              <div className="w-full h-full bg-gradient-to-br from-primary/30 to-accent/30" />
+            )
           ) : (
             <div className="w-full h-full bg-gradient-to-br from-primary/30 to-accent/30" />
           )}
@@ -224,15 +307,15 @@ const ProfileHeader = ({
               {isOwnProfile ? (
                 <EditableAvatar
                   initialAvatar={localUser.avatar}
-                  avatarSrc={avatarSrc}
+                  avatarSrc={avatarRenderSrc}
                   onAvatarChange={handleAvatarChange}
                   userName={localUser.name}
                 />
               ) : (
                 <div className="h-20 w-20 sm:h-24 sm:w-24 rounded-full border-4 border-background shadow-md overflow-hidden bg-primary flex items-center justify-center">
-                  {avatarSrc ? (
+                  {avatarRenderSrc ? (
                     <img
-                      src={avatarSrc}
+                      src={avatarRenderSrc}
                       alt={localUser.name}
                       className="h-full w-full object-cover"
                       loading="eager"
@@ -259,13 +342,13 @@ const ProfileHeader = ({
                 <div className="flex flex-wrap items-center justify-center sm:justify-start gap-x-4 gap-y-2 mt-3 text-xs sm:text-sm">
                   <div className="flex items-center gap-1.5">
                     <span className="text-foreground font-semibold">
-                      {localFollowersCount}
+                      <CounterValue value={localFollowersCount} />
                     </span>
                     <span className="text-muted-foreground">seguidores</span>
                   </div>
                   <div className="flex items-center gap-1.5">
                     <span className="text-foreground font-semibold">
-                      {followingCount}
+                      <CounterValue value={followingCount} />
                     </span>
                     <span className="text-muted-foreground">seguindo</span>
                   </div>
@@ -332,13 +415,18 @@ const ProfileHeader = ({
                           : 'joby-gradient text-primary-foreground'
                       }`}
                       onClick={handleFollowToggle}
+                      disabled={followLoading}
                     >
                       {followingStatus ? (
                         <UserCheck size={16} />
                       ) : (
                         <UserPlus size={16} />
                       )}
-                      {followingStatus ? 'Seguindo' : 'Seguir'}
+                      {followLoading
+                        ? 'Carregando...'
+                        : followingStatus
+                          ? 'Seguindo'
+                          : 'Seguir'}
                     </Button>
 
                     <Button

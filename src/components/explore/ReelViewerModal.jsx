@@ -1,29 +1,41 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { AnimatePresence, motion } from 'framer-motion'
-import { ArrowLeft, Check, Eye, MessageCircle, Play, Plus, ThumbsUp, Volume2, VolumeX } from 'lucide-react'
+import { ArrowLeft, Check, Eye, MessageCircle, Play, Pause, Plus, ThumbsUp, Volume2, VolumeX, Maximize } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
 
 import { Button } from '@/components/ui/button'
+                    src={open ? (videoSrc || undefined) : undefined}
 import { useToast } from '@/components/ui/use-toast'
 import { useAuth } from '@/contexts/AuthContext'
-import { useResolvedStorageUrl } from '@/lib/storageUrl'
+import { useLikes } from '@/contexts/LikesContext'
+import { useCommentsMeta } from '@/contexts/CommentsMetaContext'
+import { buildR2VideoPlaybackUrl, useResolvedStorageUrl } from '@/lib/storageUrl'
 import { getProfileDisplayName, getProfileInitial } from '@/lib/profileDisplay'
 import { asInt, formatCompactNumber } from '@/lib/numberFormat'
+import { commentApi } from '@/lib/commentApi'
 import { CommentsSheet } from '@/components/comments/CommentsSheet'
-import { checkVideoLike, getVideoLikesCount, likeVideo, unlikeVideo } from '@/services/commentService'
-import { incrementVideoView } from '@/services/viewService'
+import { prefetchComments } from '@/hooks/useComments'
+import { hasSessionViewedVideo, incrementVideoView, markSessionViewedVideo } from '@/services/viewService'
+
+import { attemptPlayWithMuteFallback } from '@/lib/videoAudioPrefs'
 
 export const ReelViewerModal = ({ open, onOpenChange, video, author }) => {
   const { toast } = useToast()
   const { user: currentUser } = useAuth()
+  const likes = useLikes()
+  const commentsMeta = useCommentsMeta()
   const navigate = useNavigate()
 
   const videoRef = useRef(null)
-  const viewedOnceRef = useRef(false)
+  const viewTimerRef = useRef(null)
+  const viewCountedRef = useRef(false)
+  const visibleEnoughRef = useRef(true)
+  const tapTimerRef = useRef(null)
+  const hideControlsTimeoutRef = useRef(null)
 
-  const videoSrc = useResolvedStorageUrl(video?.url, { provider: video?.provider })
-  const posterSrc = useResolvedStorageUrl(video?.thumbnail || '', { provider: video?.provider })
+  const videoSrc = useMemo(() => buildR2VideoPlaybackUrl(video?.url), [video?.url])
+  const posterSrc = useResolvedStorageUrl(video?.thumbnail_url || video?.thumbnail || '', { provider: video?.provider })
 
   const avatarSrc = useResolvedStorageUrl(author?.avatar || '')
   const displayName = useMemo(() => getProfileDisplayName(author), [author])
@@ -33,51 +45,193 @@ export const ReelViewerModal = ({ open, onOpenChange, video, author }) => {
     return String(video?.description || video?.title || '').trim()
   }, [video?.description, video?.title])
 
-  const commentsCount = asInt(video?.comments_count ?? video?.comments ?? 0)
+  const [commentsCount, setCommentsCount] = useState(asInt(video?.comments_count ?? video?.comments ?? 0))
 
   const [isPlaying, setIsPlaying] = useState(false)
-  const [isMuted, setIsMuted] = useState(true)
-  const [liked, setLiked] = useState(false)
-  const [likeCount, setLikeCount] = useState(asInt(video?.likes_count ?? video?.likes ?? 0))
+  const [isMuted, setIsMuted] = useState(false)
+  const [showControls, setShowControls] = useState(false)
+  const [progress, setProgress] = useState(0)
+  const [duration, setDuration] = useState(0)
+  const [currentTime, setCurrentTime] = useState(0)
+  const [likeBurstKey, setLikeBurstKey] = useState(0)
+  const likeBurstTimeoutRef = useRef(null)
+  const liked = video?.id ? likes.isLiked('video', video.id) : false
+  const likeCount = video?.id ? likes.getCount('video', video.id) : null
   const [viewCount, setViewCount] = useState(asInt(video?.views_count ?? video?.views ?? 0))
   const [commentsOpen, setCommentsOpen] = useState(false)
+
+  const handleCommentsCountChange = useCallback(
+    (nextCount) => {
+      if (!video?.id) return
+      if (typeof nextCount !== 'number') return
+      setCommentsCount(nextCount)
+      commentsMeta.setCount('video', video.id, nextCount)
+    },
+    [commentsMeta, video?.id]
+  )
+
+  useEffect(() => {
+    if (!open) return
+    if (!video?.id) return
+    void prefetchComments({ contentId: video.id, contentType: 'video', sort: 'new' })
+  }, [open, video?.id])
+
+  // Only keep src while modal is open.
+  useEffect(() => {
+    const el = videoRef.current
+    if (!el) return
+
+    if (open) {
+      if (videoSrc) {
+        const cur = el.getAttribute('src') || ''
+        if (cur !== videoSrc) {
+          el.setAttribute('src', videoSrc)
+          try {
+            el.load?.()
+          } catch {
+            // ignore
+          }
+        }
+      }
+      return
+    }
+
+    try {
+      el.pause?.()
+      el.removeAttribute('src')
+      el.load?.()
+    } catch {
+      // ignore
+    }
+  }, [open, videoSrc])
+
+  // Reels: ensure comment count is exact (avoid showing stale comments_count)
+  useEffect(() => {
+    if (!open) return
+    const id = video?.id
+    if (!id) return
+
+    let cancelled = false
+    ;(async () => {
+      const { count: exact, error } = await commentApi.getTotalCommentsCount({ videoId: id })
+      if (cancelled) return
+      if (error) return
+      setCommentsCount(exact)
+      commentsMeta.setCount('video', id, exact)
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [commentsMeta, open, video?.id])
 
   const [isFollowing, setIsFollowing] = useState(false)
   const [followLoading, setFollowLoading] = useState(false)
 
   // Reset when swapping videos
   useEffect(() => {
-    viewedOnceRef.current = false
     setIsPlaying(false)
-    setIsMuted(true)
-    setLiked(false)
-    setLikeCount(asInt(video?.likes_count ?? video?.likes ?? 0))
+    setIsMuted(false)
+    setShowControls(false)
+    setProgress(0)
+    setDuration(0)
+    setCurrentTime(0)
+    setLikeBurstKey(0)
     setViewCount(asInt(video?.views_count ?? video?.views ?? 0))
+    setCommentsCount(asInt(video?.comments_count ?? video?.comments ?? 0))
+    viewCountedRef.current = hasSessionViewedVideo(video?.id)
+    visibleEnoughRef.current = true
+    if (viewTimerRef.current) {
+      clearTimeout(viewTimerRef.current)
+      viewTimerRef.current = null
+    }
+    if (tapTimerRef.current) {
+      clearTimeout(tapTimerRef.current)
+      tapTimerRef.current = null
+    }
+    if (hideControlsTimeoutRef.current) {
+      clearTimeout(hideControlsTimeoutRef.current)
+      hideControlsTimeoutRef.current = null
+    }
+    if (likeBurstTimeoutRef.current) {
+      clearTimeout(likeBurstTimeoutRef.current)
+      likeBurstTimeoutRef.current = null
+    }
   }, [video?.id])
 
-  // Load like state + sync count when open
+  useEffect(() => {
+    if (!video?.id) return
+    void commentsMeta.hydrateForIds('video', [video.id])
+  }, [commentsMeta, video?.id])
+
+  const liveCommentsCount = video?.id ? commentsMeta.getCount('video', video.id) : null
+  const commentsCountToShow = typeof liveCommentsCount === 'number' ? liveCommentsCount : commentsCount
+
+  useEffect(() => {
+    if (!likeBurstKey) return
+    if (likeBurstTimeoutRef.current) {
+      clearTimeout(likeBurstTimeoutRef.current)
+      likeBurstTimeoutRef.current = null
+    }
+    likeBurstTimeoutRef.current = setTimeout(() => {
+      setLikeBurstKey(0)
+      likeBurstTimeoutRef.current = null
+    }, 520)
+  }, [likeBurstKey])
+
+  const formatTime = useCallback((timeInSeconds) => {
+    const safe = Math.max(0, Number(timeInSeconds) || 0)
+    const minutes = Math.floor(safe / 60)
+    const seconds = Math.floor(safe % 60)
+      .toString()
+      .padStart(2, '0')
+    return `${minutes}:${seconds}`
+  }, [])
+
+  const showControlsWithAutoHide = useCallback((options) => {
+    const delayMs = Math.max(500, Number(options?.delayMs) || 2500)
+    setShowControls(true)
+
+    if (hideControlsTimeoutRef.current) {
+      clearTimeout(hideControlsTimeoutRef.current)
+      hideControlsTimeoutRef.current = null
+    }
+
+    hideControlsTimeoutRef.current = setTimeout(() => {
+      setShowControls(false)
+      hideControlsTimeoutRef.current = null
+    }, delayMs)
+  }, [])
+
+  const handleTimeUpdate = useCallback(() => {
+    const el = videoRef.current
+    if (!el || !el.duration) return
+    const ratio = el.currentTime / el.duration
+    setProgress(Math.max(0, Math.min(100, ratio * 100)))
+    setCurrentTime(el.currentTime)
+  }, [])
+
+  const handleLoadedMetadata = useCallback(() => {
+    const el = videoRef.current
+    if (!el) return
+    setDuration(Number(el.duration) || 0)
+  }, [])
+
+  const handleProgressChange = useCallback((value) => {
+    const el = videoRef.current
+    if (!el || !el.duration) return
+    const pct = Number(value?.[0] ?? 0)
+    const newTime = (pct / 100) * el.duration
+    el.currentTime = newTime
+    setProgress(pct)
+    setCurrentTime(newTime)
+  }, [])
+
+  // Hydrate global like state when open / video changes
   useEffect(() => {
     if (!open || !video?.id) return
-
-    let cancelled = false
-    ;(async () => {
-      try {
-        const [{ liked: isLiked }, { count }] = await Promise.all([
-          checkVideoLike(video.id),
-          getVideoLikesCount(video.id),
-        ])
-        if (cancelled) return
-        setLiked(!!isLiked)
-        if (typeof count === 'number') setLikeCount(count)
-      } catch {
-        // ignore
-      }
-    })()
-
-    return () => {
-      cancelled = true
-    }
-  }, [open, video?.id])
+    void likes.hydrateForIds('video', [video.id])
+  }, [likes, open, video?.id])
 
   // Load follow state when open
   useEffect(() => {
@@ -118,21 +272,93 @@ export const ReelViewerModal = ({ open, onOpenChange, video, author }) => {
     }
   }, [open, author?.id, currentUser?.id])
 
-  // Increment view once when opening
+  // Visibilidade (>= 60%) + timer de "assistiu de verdade" (2.5s tocando)
   useEffect(() => {
-    if (!open || !video?.id) return
-    if (viewedOnceRef.current) return
-    viewedOnceRef.current = true
+    if (!open) return
+    const el = videoRef.current
+    if (!el) return
 
-    ;(async () => {
-      try {
-        const { views } = await incrementVideoView(video.id)
-        if (typeof views === 'number') setViewCount(views)
-        else setViewCount((prev) => prev + 1)
-      } catch {
-        setViewCount((prev) => prev + 1)
+    const maybeStartViewTimer = () => {
+      const id = video?.id
+      if (!open || !id) return
+      if (viewCountedRef.current) return
+      if (hasSessionViewedVideo(id)) {
+        viewCountedRef.current = true
+        return
       }
-    })()
+
+      const canCount =
+        visibleEnoughRef.current &&
+        !el.paused &&
+        !el.ended &&
+        el.readyState >= 2
+
+      if (!canCount) {
+        if (viewTimerRef.current) {
+          clearTimeout(viewTimerRef.current)
+          viewTimerRef.current = null
+        }
+        return
+      }
+
+      if (viewTimerRef.current) return
+
+      viewTimerRef.current = setTimeout(async () => {
+        viewTimerRef.current = null
+        const stillCanCount =
+          open &&
+          visibleEnoughRef.current &&
+          !el.paused &&
+          !el.ended &&
+          el.readyState >= 2
+
+        if (!stillCanCount) return
+        if (viewCountedRef.current) return
+        if (hasSessionViewedVideo(id)) {
+          viewCountedRef.current = true
+          return
+        }
+
+        viewCountedRef.current = true
+        markSessionViewedVideo(id)
+        try {
+          const { views } = await incrementVideoView(id)
+          if (typeof views === 'number') setViewCount(views)
+          else setViewCount((prev) => prev + 1)
+        } catch {
+          setViewCount((prev) => prev + 1)
+        }
+      }, 2500)
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const ratio = Number(entries?.[0]?.intersectionRatio || 0)
+        visibleEnoughRef.current = ratio >= 0.6
+        maybeStartViewTimer()
+      },
+      { threshold: [0, 0.6, 1] }
+    )
+
+    observer.observe(el)
+
+    const onPlay = () => maybeStartViewTimer()
+    const onPause = () => maybeStartViewTimer()
+    el.addEventListener('play', onPlay)
+    el.addEventListener('pause', onPause)
+
+    // Tenta iniciar imediatamente caso já esteja tocando
+    maybeStartViewTimer()
+
+    return () => {
+      observer.disconnect()
+      el.removeEventListener('play', onPlay)
+      el.removeEventListener('pause', onPause)
+      if (viewTimerRef.current) {
+        clearTimeout(viewTimerRef.current)
+        viewTimerRef.current = null
+      }
+    }
   }, [open, video?.id])
 
   // Auto-play when open
@@ -141,24 +367,59 @@ export const ReelViewerModal = ({ open, onOpenChange, video, author }) => {
     const el = videoRef.current
     if (!el) return
 
-    // Keep muted to allow autoplay on mobile
-    el.muted = true
-    setIsMuted(true)
-
-    el.play()
-      .then(() => setIsPlaying(true))
+    attemptPlayWithMuteFallback(el, { muted: isMuted, allowFallback: false })
+      .then((res) => {
+        setIsPlaying(!!res?.ok)
+      })
       .catch(() => setIsPlaying(false))
-  }, [open, videoSrc])
+  }, [open, videoSrc, isMuted])
+
+  useEffect(() => {
+    if (open) return
+    setShowControls(false)
+    if (hideControlsTimeoutRef.current) {
+      clearTimeout(hideControlsTimeoutRef.current)
+      hideControlsTimeoutRef.current = null
+    }
+  }, [open])
+
+  useEffect(() => {
+    const el = videoRef.current
+    if (!el) return
+    const onPlay = () => setIsPlaying(true)
+    const onPause = () => setIsPlaying(false)
+    el.addEventListener('play', onPlay)
+    el.addEventListener('pause', onPause)
+    return () => {
+      el.removeEventListener('play', onPlay)
+      el.removeEventListener('pause', onPause)
+    }
+  }, [])
 
   const togglePlay = useCallback(() => {
     const el = videoRef.current
     if (!el) return
 
     if (el.paused || el.ended) {
-      el.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false))
+      attemptPlayWithMuteFallback(el, { muted: isMuted, allowFallback: false })
+        .then((res) => setIsPlaying(!!res?.ok))
+        .catch(() => setIsPlaying(false))
     } else {
       el.pause()
       setIsPlaying(false)
+    }
+  }, [isMuted])
+
+  const isCenterTap = useCallback((evt) => {
+    try {
+      const el = evt?.currentTarget
+      if (!el?.getBoundingClientRect) return false
+      const rect = el.getBoundingClientRect()
+      const x = (evt?.clientX - rect.left) / Math.max(1, rect.width)
+      const y = (evt?.clientY - rect.top) / Math.max(1, rect.height)
+      return x >= 0.35 && x <= 0.65 && y >= 0.35 && y <= 0.65
+    } catch {
+      return false
     }
   }, [])
 
@@ -166,8 +427,9 @@ export const ReelViewerModal = ({ open, onOpenChange, video, author }) => {
     e?.stopPropagation?.()
     const el = videoRef.current
     if (!el) return
-    el.muted = !el.muted
-    setIsMuted(el.muted)
+    const next = !el.muted
+    el.muted = next
+    setIsMuted(next)
   }, [])
 
   const toggleLike = useCallback(
@@ -184,25 +446,10 @@ export const ReelViewerModal = ({ open, onOpenChange, video, author }) => {
         return
       }
 
-      const nextLiked = !liked
-      setLiked(nextLiked)
-      setLikeCount((prev) => Math.max(0, prev + (nextLiked ? 1 : -1)))
-
       try {
-        if (nextLiked) {
-          const { error } = await likeVideo(video.id)
-          if (error) throw error
-        } else {
-          const { error } = await unlikeVideo(video.id)
-          if (error) throw error
-        }
-
-        const { count } = await getVideoLikesCount(video.id)
-        if (typeof count === 'number') setLikeCount(count)
+        const res = await likes.toggleLike('video', video.id)
+        if (res?.error) throw res.error
       } catch (error) {
-        // rollback
-        setLiked((prev) => !prev)
-        setLikeCount((prev) => Math.max(0, prev + (nextLiked ? -1 : 1)))
         toast({
           title: 'Erro ao curtir',
           description: error?.message || 'Tente novamente.',
@@ -210,7 +457,54 @@ export const ReelViewerModal = ({ open, onOpenChange, video, author }) => {
         })
       }
     },
-    [currentUser, liked, toast, video?.id]
+    [currentUser, likes, toast, video?.id]
+  )
+
+  const handleTap = useCallback(
+    (e) => {
+      const center = isCenterTap(e)
+
+      // Duplo toque: curtir
+      if (tapTimerRef.current) {
+        clearTimeout(tapTimerRef.current)
+        tapTimerRef.current = null
+
+        // Instagram-like: duplo-toque só CURTE (não descurte) e só anima se realmente vai curtir.
+        if (!currentUser) {
+          toggleLike(e)
+          return
+        }
+        if (liked) return
+
+        setLikeBurstKey(Date.now())
+        toggleLike(e)
+        return
+      }
+
+      // Toque único: aguarda para não conflitar com duplo-toque
+      tapTimerRef.current = setTimeout(() => {
+        tapTimerRef.current = null
+        if (center) {
+          showControlsWithAutoHide({ delayMs: 2500 })
+          togglePlay()
+          return
+        }
+
+        setShowControls((prev) => {
+          const next = !prev
+          if (!next) {
+            if (hideControlsTimeoutRef.current) {
+              clearTimeout(hideControlsTimeoutRef.current)
+              hideControlsTimeoutRef.current = null
+            }
+            return false
+          }
+          showControlsWithAutoHide({ delayMs: 2500 })
+          return true
+        })
+      }, 240)
+    },
+    [isCenterTap, showControlsWithAutoHide, toggleLike, togglePlay]
   )
 
   const openComments = useCallback(
@@ -295,8 +589,11 @@ export const ReelViewerModal = ({ open, onOpenChange, video, author }) => {
                 className="fixed inset-0 z-[10000] h-[100dvh] w-full overflow-hidden bg-black"
               >
                 <DialogPrimitive.Title className="sr-only">Reels</DialogPrimitive.Title>
+                <DialogPrimitive.Description className="sr-only">
+                  Visualizador de Reel com ações de curtir e comentar.
+                </DialogPrimitive.Description>
 
-                <div className="relative h-full w-full" onClick={togglePlay}>
+                <div className="relative h-full w-full" onClick={handleTap}>
                   <video
                     ref={videoRef}
                     src={videoSrc}
@@ -305,10 +602,56 @@ export const ReelViewerModal = ({ open, onOpenChange, video, author }) => {
                     playsInline
                     loop
                     muted={isMuted}
+                    onTimeUpdate={handleTimeUpdate}
+                    onLoadedMetadata={handleLoadedMetadata}
                     preload="metadata"
                   />
 
                   <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/10 to-black/30 pointer-events-none" />
+
+                  <AnimatePresence>
+                    {!!likeBurstKey && (
+                      <motion.div
+                        key={likeBurstKey}
+                        initial={{ opacity: 0, scale: 0.7 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        exit={{ opacity: 0, scale: 1.05 }}
+                        transition={{ duration: 0.28 }}
+                        className="absolute inset-0 flex items-center justify-center pointer-events-none z-20"
+                      >
+                        <div className="relative">
+                          {/* Partículas */}
+                          {Array.from({ length: 10 }).map((_, i) => {
+                            const angle = (i / 10) * Math.PI * 2
+                            const dx = Math.cos(angle) * 44
+                            const dy = Math.sin(angle) * 44
+                            return (
+                              <motion.span
+                                // eslint-disable-next-line react/no-array-index-key
+                                key={i}
+                                initial={{ opacity: 0, x: 0, y: 0, scale: 0.6 }}
+                                animate={{ opacity: [0, 1, 0], x: dx, y: dy, scale: [0.6, 1.15, 0.9] }}
+                                transition={{ duration: 0.48, ease: 'easeOut', times: [0, 0.25, 1] }}
+                                className="absolute left-1/2 top-1/2 h-1.5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-orange-300"
+                                style={{ boxShadow: '0 0 12px rgba(249,115,22,0.65)' }}
+                              />
+                            )
+                          })}
+
+                          {/* Ícone central + glow */}
+                          <motion.div
+                            initial={{ boxShadow: '0 0 0px rgba(249,115,22,0)', scale: 0.9, opacity: 0 }}
+                            animate={{ boxShadow: '0 0 34px rgba(249,115,22,0.75)', scale: 1, opacity: 1 }}
+                            exit={{ boxShadow: '0 0 0px rgba(249,115,22,0)', scale: 0.98, opacity: 0 }}
+                            transition={{ duration: 0.22, ease: 'easeOut' }}
+                            className="relative flex h-12 w-12 items-center justify-center rounded-full bg-orange-500"
+                          >
+                            <ThumbsUp size={28} className="text-white fill-white drop-shadow" />
+                          </motion.div>
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
 
                   {/* Exit */}
                   <div className="absolute left-3 top-3 z-20">
@@ -351,6 +694,66 @@ export const ReelViewerModal = ({ open, onOpenChange, video, author }) => {
                         className="absolute inset-0 flex items-center justify-center pointer-events-none z-10"
                       >
                         <Play size={64} className="text-white/75 drop-shadow-lg" />
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+
+                  <AnimatePresence>
+                    {showControls && (
+                      <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="video-controls absolute bottom-3 left-3 right-3 flex items-center space-x-2 z-30 p-2 bg-black/40 backdrop-blur-sm rounded-lg"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            togglePlay()
+                            showControlsWithAutoHide({ delayMs: 2500 })
+                          }}
+                          className="text-white p-1.5 hover:bg-white/20 rounded-full"
+                          aria-label={isPlaying ? 'Pausar' : 'Reproduzir'}
+                        >
+                          {isPlaying ? <Pause size={18} /> : <Play size={18} />}
+                        </button>
+
+                        <span className="text-white text-xs font-mono">{formatTime(currentTime)}</span>
+                        <Slider
+                          value={[progress]}
+                          max={100}
+                          step={0.1}
+                          onValueChange={handleProgressChange}
+                          onClick={(e) => e.stopPropagation()}
+                          className="w-full flex-1 mx-1"
+                        />
+                        <span className="text-white text-xs font-mono">{formatTime(duration)}</span>
+
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            toggleMute(e)
+                            showControlsWithAutoHide({ delayMs: 2500 })
+                          }}
+                          className="text-white p-1.5 hover:bg-white/20 rounded-full"
+                          aria-label={isMuted ? 'Ativar som' : 'Mutar'}
+                        >
+                          {isMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}
+                        </button>
+
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            const el = videoRef.current
+                            if (el?.requestFullscreen) el.requestFullscreen()
+                            showControlsWithAutoHide({ delayMs: 2500 })
+                          }}
+                          className="text-white p-1.5 hover:bg-white/20 rounded-full"
+                          aria-label="Tela cheia"
+                        >
+                          <Maximize size={18} />
+                        </button>
                       </motion.div>
                     )}
                   </AnimatePresence>
@@ -415,11 +818,15 @@ export const ReelViewerModal = ({ open, onOpenChange, video, author }) => {
                         <ThumbsUp size={20} className={liked ? 'text-primary fill-primary' : 'text-white'} />
                       </div>
                       <span className="text-[11px] font-semibold mt-1 drop-shadow-md">
-                        {formatCompactNumber(likeCount)}
+                        {typeof likeCount === 'number' ? formatCompactNumber(likeCount) : '—'}
                       </span>
                     </button>
 
                     <button
+                      onPointerDown={() => {
+                        if (!video?.id) return
+                        void prefetchComments({ contentId: video.id, contentType: 'video', sort: 'new' })
+                      }}
                       onClick={openComments}
                       className="flex flex-col items-center text-white hover:scale-110 transition-transform"
                       aria-label="Comentários"
@@ -428,7 +835,7 @@ export const ReelViewerModal = ({ open, onOpenChange, video, author }) => {
                         <MessageCircle size={20} />
                       </div>
                       <span className="text-[11px] font-semibold mt-1 drop-shadow-md">
-                        {formatCompactNumber(commentsCount)}
+                        {formatCompactNumber(commentsCountToShow)}
                       </span>
                     </button>
 
@@ -461,6 +868,7 @@ export const ReelViewerModal = ({ open, onOpenChange, video, author }) => {
                   onOpenChange={setCommentsOpen}
                   contentId={video?.id}
                   contentType="video"
+                  onCountChange={handleCommentsCountChange}
                 />
               </motion.div>
             </DialogPrimitive.Content>

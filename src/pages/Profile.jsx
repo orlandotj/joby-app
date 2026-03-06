@@ -33,6 +33,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/contexts/AuthContext'
+import { useLikes } from '@/contexts/LikesContext'
 import AddContentFab from '@/components/AddContentFab'
 import UploadDialog from '@/components/UploadDialog'
 import ServiceForm from '@/components/ServiceForm'
@@ -40,11 +41,16 @@ import ServiceDetailsModal from '@/components/ServiceDetailsModal'
 import { supabase } from '@/lib/supabaseClient'
 import { getProfileDisplayName } from '@/lib/profileDisplay'
 import { resolveStorageUrl, useResolvedStorageUrl } from '@/lib/storageUrl'
+import { log } from '@/lib/logger'
 import { useToast } from '@/components/ui/use-toast'
 import { isUuid } from '@/lib/uuid'
 import { formatPriceUnit } from '@/lib/priceUnit'
 import { useSwipeTabs } from '@/hooks/useSwipeTabs'
 import { TabTransition } from '@/components/TabTransition'
+import {
+  getCachedProfileCounters,
+  setCachedProfileCounters,
+} from '@/lib/profileCountersCache'
 
 const imageDebugOn = () => {
   try {
@@ -56,6 +62,9 @@ const imageDebugOn = () => {
 
 const SERVICE_COVER_PLACEHOLDER =
   'https://placehold.co/600x400/e2e8f0/64748b?text=Serviço'
+
+let VIDEO_SELECT_COLS_CACHE = null
+let PHOTO_SELECT_COLS_CACHE = null
 
 const ServiceCoverImage = ({ service }) => {
   const resolvedSrc = useResolvedStorageUrl(service?.image || '', {
@@ -85,9 +94,10 @@ const VideoGridItem = ({ video, onClick, index = 0 }) => {
 
   const videoSrc = useResolvedStorageUrl(video?.url, {
     preferPublic: true,
+    provider: video?.provider,
     debugLabel: `video:${video?.id}:url`,
   })
-  const posterSrc = useResolvedStorageUrl(video?.thumbnail || '', {
+  const posterSrc = useResolvedStorageUrl(video?.thumbnail_url || video?.thumbnail || '', {
     preferPublic: true,
     debugLabel: `video:${video?.id}:thumb`,
   })
@@ -108,6 +118,44 @@ const VideoGridItem = ({ video, onClick, index = 0 }) => {
     }
   }
 
+  const isTouchLikePointer = (e) => {
+    const t = String(e?.pointerType || '')
+    return t === 'touch' || t === 'pen'
+  }
+
+  const handlePointerDown = (e) => {
+    // Em mobile não existe hover: qualquer interação deve iniciar a prévia.
+    // Mantemos o modal no onClick (e pausamos a prévia antes de abrir).
+    if (!isTouchLikePointer(e)) return
+    setShouldPlay(true)
+  }
+
+  const handlePointerEnd = (e) => {
+    // Se o usuário só tocou/scrollou (sem abrir modal), pare a prévia.
+    if (!isTouchLikePointer(e)) return
+    setShouldPlay(false)
+    if (videoRef.current) {
+      try {
+        videoRef.current.pause()
+        videoRef.current.currentTime = 0
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  const stopPreviewNow = () => {
+    setShouldPlay(false)
+    if (videoRef.current) {
+      try {
+        videoRef.current.pause()
+        videoRef.current.currentTime = 0
+      } catch {
+        // ignore
+      }
+    }
+  }
+
   useEffect(() => {
     if (!shouldPlay) return
     if (!videoRef.current) return
@@ -115,16 +163,23 @@ const VideoGridItem = ({ video, onClick, index = 0 }) => {
 
     videoRef.current
       .play()
-      .catch((e) => import.meta.env.DEV && console.log('Play error:', e))
+      .catch((e) => {
+        const name = String(e?.name || '')
+        const msg = String(e?.message || '')
+        const low = `${name} ${msg}`.toLowerCase()
+        const isAbort = name === 'AbortError' || low.includes('aborterror') || low.includes('interrupted')
+        if (isAbort) return
+        if (import.meta.env.DEV) log.debug('PROFILE', 'Play error', e)
+      })
   }, [shouldPlay, videoSrc])
 
   useEffect(() => {
     if (!imageDebugOn()) return
     const t = performance.now()
-    console.log(`[IMG] VideoGridItem mount id=${video?.id} idx=${index} t=${t.toFixed(1)}`)
+    log.debug('IMG', 'VideoGridItem mount', { id: video?.id, idx: index, t: t.toFixed(1) })
     return () => {
       const t2 = performance.now()
-      console.log(`[IMG] VideoGridItem unmount id=${video?.id} idx=${index} t=${t2.toFixed(1)}`)
+      log.debug('IMG', 'VideoGridItem unmount', { id: video?.id, idx: index, t: t2.toFixed(1) })
     }
   }, [video?.id, index])
 
@@ -137,7 +192,14 @@ const VideoGridItem = ({ video, onClick, index = 0 }) => {
       style={{ willChange: 'opacity', transform: 'translateZ(0)' }}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
-      onClick={onClick}
+      onPointerDown={handlePointerDown}
+      onPointerUp={handlePointerEnd}
+      onPointerCancel={handlePointerEnd}
+      onPointerLeave={handlePointerEnd}
+      onClick={() => {
+        stopPreviewNow()
+        onClick?.()
+      }}
     >
       <video
         ref={videoRef}
@@ -150,11 +212,13 @@ const VideoGridItem = ({ video, onClick, index = 0 }) => {
         playsInline
         onLoadedData={() => {
           if (imageDebugOn() && isAboveFold) {
-            console.log(
-              `[IMG] video loaded id=${video?.id} idx=${index} render#${renderCount.current} src=${String(
-                videoSrc
-              ).substring(0, 80)}... t=${performance.now().toFixed(1)}`
-            )
+            log.debug('IMG', 'video loaded', {
+              id: video?.id,
+              idx: index,
+              render: renderCount.current,
+              src: String(videoSrc).substring(0, 80),
+              t: performance.now().toFixed(1),
+            })
           }
         }}
       />
@@ -189,10 +253,10 @@ const PhotoGridItem = ({ photo, onClick, index = 0 }) => {
   useEffect(() => {
     if (!imageDebugOn()) return
     const t = performance.now()
-    console.log(`[IMG] PhotoGridItem mount id=${photo?.id} idx=${index} t=${t.toFixed(1)}`)
+    log.debug('IMG', 'PhotoGridItem mount', { id: photo?.id, idx: index, t: t.toFixed(1) })
     return () => {
       const t2 = performance.now()
-      console.log(`[IMG] PhotoGridItem unmount id=${photo?.id} idx=${index} t=${t2.toFixed(1)}`)
+      log.debug('IMG', 'PhotoGridItem unmount', { id: photo?.id, idx: index, t: t2.toFixed(1) })
     }
   }, [photo?.id, index])
 
@@ -217,11 +281,14 @@ const PhotoGridItem = ({ photo, onClick, index = 0 }) => {
     const loadTime = performance.now() - loadStartTime.current
     setImgLoaded(true)
     if (imageDebugOn() && isAboveFold) {
-      console.log(
-        `[IMG] photo loaded id=${photo?.id} idx=${index} render#${renderCount.current} in ${loadTime.toFixed(
-          2
-        )}ms (${loadingStrategy}) url=${String(finalSrc).substring(0, 80)}...`
-      )
+      log.debug('IMG', 'photo loaded', {
+        id: photo?.id,
+        idx: index,
+        render: renderCount.current,
+        ms: loadTime.toFixed(2),
+        loading: loadingStrategy,
+        url: String(finalSrc).substring(0, 80),
+      })
     }
   }
 
@@ -273,6 +340,7 @@ const Profile = () => {
   const location = useLocation()
   const navigate = useNavigate()
   const { user: currentUser } = useAuth()
+  const likes = useLikes()
   const [user, setUser] = useState(null)
   const [videos, setVideos] = useState([])
   const [photos, setPhotos] = useState([]) // Added state for photos
@@ -288,9 +356,9 @@ const Profile = () => {
   const [isServiceDetailsOpen, setIsServiceDetailsOpen] = useState(false)
   const [selectedService, setSelectedService] = useState(null)
   const [editingService, setEditingService] = useState(null)
-  const [followersCount, setFollowersCount] = useState(0)
-  const [followingCount, setFollowingCount] = useState(0)
-  const [isFollowing, setIsFollowing] = useState(false)
+  const [followersCount, setFollowersCount] = useState(null)
+  const [followingCount, setFollowingCount] = useState(null)
+  const [isFollowing, setIsFollowing] = useState(null)
   const [selectedContent, setSelectedContent] = useState(null)
   const [isContentModalOpen, setIsContentModalOpen] = useState(false)
 
@@ -311,9 +379,18 @@ const Profile = () => {
 
   const isOwnProfile = currentUser?.id === profileId
 
+  // Keep global likes hydrated for any items currently in the profile
+  useEffect(() => {
+    const videoIds = (videos || []).map((v) => v?.id).filter(Boolean)
+    const photoIds = (photos || []).map((p) => p?.id).filter(Boolean)
+    if (videoIds.length) void likes.hydrateForIds('video', videoIds)
+    if (photoIds.length) void likes.hydrateForIds('photo', photoIds)
+  }, [likes, photos, videos])
+
   // Prevent duplicate in-flight loads (React 18 StrictMode runs effects twice in DEV)
   const loadSeqRef = useRef(0)
   const loadInFlightRef = useRef({ profileId: null, seq: 0, inFlight: false })
+  const countersSeqRef = useRef(0)
   const lastGridLogRef = useRef('')
 
   // DEBUG: Contador de renders
@@ -321,7 +398,7 @@ const Profile = () => {
   useEffect(() => {
     renderCount.current += 1
     if (imageDebugOn()) {
-      console.log(`[PROFILE] 🔄 Render #${renderCount.current} - profileId: ${profileId}`)
+      log.debug('PROFILE', 'Render', { count: renderCount.current, profileId })
     }
   })
 
@@ -362,7 +439,15 @@ const Profile = () => {
 
     // Guard rails: avoid queries like id=eq.edit (and any other invalid uuid)
     if (profileId === 'edit') {
-      navigate(`/me/edit${location.search || ''}`, { replace: true })
+      const dest = `/me/edit${location.search || ''}`
+      try {
+        if (import.meta.env.DEV) {
+          log.debug('NAV', dest, 'profile:legacy_edit_redirect', new Error().stack)
+        }
+      } catch {
+        // ignore
+      }
+      navigate(dest, { replace: true })
       return
     }
 
@@ -371,9 +456,88 @@ const Profile = () => {
       return
     }
 
-    if (imageDebugOn()) console.log('Loading profile for:', profileId)
+    if (imageDebugOn()) log.debug('IMG', 'Loading profile for', profileId)
+
+    // Counters: show cached values immediately (if any) and refresh in background.
+    const cached = getCachedProfileCounters(profileId)
+    if (cached) {
+      setFollowersCount(cached.followersCount)
+      setFollowingCount(cached.followingCount)
+      setIsFollowing(cached.isFollowing)
+    } else {
+      setFollowersCount(null)
+      setFollowingCount(null)
+      setIsFollowing(null)
+    }
+
+    refreshFollowCounters(profileId)
+
+    // Also clear previous user quickly (avoid a brief flash of the old profile header).
+    setUser(null)
+    setProfileLoading(true)
+    setContentLoading(true)
+
     loadUserProfile()
   }, [profileId])
+
+  const refreshFollowCounters = async (targetProfileId = profileId) => {
+    if (!targetProfileId || !isUuid(targetProfileId)) return
+
+    const seq = (countersSeqRef.current += 1)
+    const isStale = () => countersSeqRef.current !== seq || targetProfileId !== profileId
+
+    try {
+      const countersPromises = [
+        supabase
+          .from('follows')
+          .select('id', { count: 'exact' })
+          .eq('following_id', targetProfileId)
+          .range(0, 0),
+        supabase
+          .from('follows')
+          .select('id', { count: 'exact' })
+          .eq('follower_id', targetProfileId)
+          .range(0, 0),
+      ]
+
+      if (currentUser && currentUser.id !== targetProfileId) {
+        countersPromises.push(
+          supabase
+            .from('follows')
+            .select('id')
+            .eq('follower_id', currentUser.id)
+            .eq('following_id', targetProfileId)
+            .maybeSingle()
+        )
+      }
+
+      const countersResults = await Promise.all(countersPromises)
+      if (isStale()) return
+
+      const nextFollowers = countersResults[0]?.count ?? 0
+      const nextFollowing = countersResults[1]?.count ?? 0
+      const nextIsFollowing = countersResults[2]
+        ? !!countersResults[2].data
+        : false
+
+      setFollowersCount(nextFollowers)
+      setFollowingCount(nextFollowing)
+      setIsFollowing(nextIsFollowing)
+
+      setCachedProfileCounters(targetProfileId, {
+        followersCount: nextFollowers,
+        followingCount: nextFollowing,
+        isFollowing: nextIsFollowing,
+      })
+    } catch (error) {
+      log.error('PROFILE', 'Erro ao carregar contadores de follow', error)
+      if (!isStale()) {
+        setFollowersCount(0)
+        setFollowingCount(0)
+        setIsFollowing(false)
+      }
+    }
+  }
 
   const updateSearchParams = (mutate, { replace = false } = {}) => {
     const params = new URLSearchParams(location.search)
@@ -469,12 +633,12 @@ const Profile = () => {
 
   const loadUserProfile = async () => {
     if (!profileId) {
-      console.error('No profileId provided')
+      log.error('PROFILE', 'No profileId provided')
       return
     }
 
     if (!isUuid(profileId)) {
-      console.error('Invalid profileId (not a UUID):', profileId)
+      log.error('PROFILE', 'Invalid profileId (not a UUID)', profileId)
       return
     }
 
@@ -484,7 +648,7 @@ const Profile = () => {
       loadInFlightRef.current.profileId === profileId
     ) {
       if (imageDebugOn()) {
-        console.log(`[PROFILE] ⏭️ Skip duplicate in-flight load for ${profileId}`)
+        log.debug('PROFILE', 'Skip duplicate in-flight load', profileId)
       }
       return
     }
@@ -495,15 +659,99 @@ const Profile = () => {
 
     const t0 = performance.now()
     if (imageDebugOn()) {
-      console.log(
-        `[PROFILE] ⏱️ Start loading profile ${profileId} seq=${seq} at ${t0.toFixed(2)}ms`
-      )
+      log.debug('PROFILE', 'Start loading profile', { profileId, seq, t: t0.toFixed(2) })
     }
 
     setProfileLoading(true)
     setContentLoading(true)
 
     try {
+      const currentProfileId = profileId
+
+      // Start media fetch ASAP (do not block on profile header).
+      const loadVideos = async () => {
+        const run = (selectCols) =>
+          supabase
+            .from('videos')
+            .select(selectCols)
+            .eq('user_id', currentProfileId)
+            .eq('is_public', true)
+            .order('created_at', { ascending: false })
+            .limit(12)
+
+        const baseCandidates = [
+          // Keep a safe default first.
+          'id, url, title, thumbnail_url, thumbnail, views, likes, created_at, video_type',
+          'id, url, title, thumbnail_url, thumbnail, views, likes, comments_count, created_at, video_type',
+          'id, url, title, thumbnail_url, thumbnail, views, likes, created_at, video_type, provider',
+          'id, url, title, thumbnail_url, thumbnail, views, likes, comments_count, created_at, video_type, provider',
+          // Fallback: schema antigo sem thumbnail_url
+          'id, url, title, thumbnail, views, likes, created_at, video_type',
+          'id, url, title, thumbnail, views, likes, comments_count, created_at, video_type',
+          'id, url, title, thumbnail, views, likes, created_at, video_type, provider',
+          'id, url, title, thumbnail, views, likes, comments_count, created_at, video_type, provider',
+        ]
+
+        const candidates = VIDEO_SELECT_COLS_CACHE
+          ? [VIDEO_SELECT_COLS_CACHE, ...baseCandidates]
+          : baseCandidates
+
+        let last = null
+        for (const cols of candidates) {
+          const r = await run(cols)
+          if (!r.error) {
+            VIDEO_SELECT_COLS_CACHE = cols
+            return r
+          }
+          last = r
+
+          const msg = String(r.error?.message || '').toLowerCase()
+          const missingColumn = msg.includes('column') && msg.includes('does not exist')
+          if (!missingColumn) return r
+        }
+
+        return last
+      }
+
+      const loadPhotos = async () => {
+        const run = (selectCols) =>
+          supabase
+            .from('photos')
+            .select(selectCols)
+            .eq('user_id', currentProfileId)
+            .eq('is_public', true)
+            .order('created_at', { ascending: false })
+            .limit(12)
+
+        const baseCandidates = [
+          // Safe default first.
+          'id, url, caption, views, likes, created_at',
+          'id, url, caption, views, likes, comments_count, created_at',
+        ]
+
+        const candidates = PHOTO_SELECT_COLS_CACHE
+          ? [PHOTO_SELECT_COLS_CACHE, ...baseCandidates]
+          : baseCandidates
+
+        let last = null
+        for (const cols of candidates) {
+          const r = await run(cols)
+          if (!r.error) {
+            PHOTO_SELECT_COLS_CACHE = cols
+            return r
+          }
+          last = r
+
+          const msg = String(r.error?.message || '').toLowerCase()
+          const missingColumn = msg.includes('column') && msg.includes('does not exist')
+          if (!missingColumn) return r
+        }
+
+        return last
+      }
+
+      const mediaPromise = Promise.all([loadVideos(), loadPhotos()])
+
       // FASE 1: Carregar profile PRIMEIRO (crítico para foto/capa aparecerem rápido)
       const t1 = performance.now()
       let profileResult = await supabase
@@ -531,7 +779,7 @@ const Profile = () => {
 
       const t2 = performance.now()
       if (imageDebugOn()) {
-        console.log(`[PROFILE] ✅ Profile fetched in ${(t2 - t1).toFixed(2)}ms`)
+        log.debug('PROFILE', 'Profile fetched', { ms: (t2 - t1).toFixed(2) })
       }
 
       if (isStale()) return
@@ -550,84 +798,54 @@ const Profile = () => {
       })
       setProfileLoading(false)
       if (imageDebugOn()) {
-        console.log(`[PROFILE] 🖼️ Avatar URL: ${profileData?.avatar}`)
+        log.debug('IMG', 'Avatar URL', profileData?.avatar)
       }
 
-      // FASE 2: Carregar conteúdo em paralelo (não bloqueia foto/capa)
+      // FASE 2: Media grid (do not block on reviews/services)
       const t3 = performance.now()
-      const loadVideos = async () => {
-        const base = supabase
-          .from('videos')
-          .eq('user_id', profileId)
-          .eq('is_public', true)
-          .order('created_at', { ascending: false })
-          .limit(12)
-
-        const r1 = await base.select(
-          'id, url, title, thumbnail, views, likes, comments_count, created_at, video_type, provider'
-        )
-        if (!r1.error) return r1
-
-        const msg = String(r1.error?.message || '').toLowerCase()
-        if (msg.includes('column') && msg.includes('does not exist')) {
-          return base.select(
-            'id, url, title, thumbnail, views, likes, created_at, video_type, provider'
-          )
-        }
-
-        return r1
-      }
-
-      const loadPhotos = async () => {
-        const base = supabase
-          .from('photos')
-          .eq('user_id', profileId)
-          .eq('is_public', true)
-          .order('created_at', { ascending: false })
-          .limit(12)
-
-        const r1 = await base.select('id, url, caption, views, likes, comments_count, created_at, provider')
-        if (!r1.error) return r1
-
-        const msg = String(r1.error?.message || '').toLowerCase()
-        if (msg.includes('column') && msg.includes('does not exist')) {
-          return base.select('id, url, caption, views, likes, created_at, provider')
-        }
-
-        return r1
-      }
-
-      const [videosResult, photosResult] = await Promise.all([loadVideos(), loadPhotos()])
+      const [videosResult, photosResult] = await mediaPromise
 
       const t4 = performance.now()
       if (imageDebugOn()) {
-        console.log(`[PROFILE] ✅ Content fetched in ${(t4 - t3).toFixed(2)}ms`)
+        log.debug('PROFILE', 'Content fetched', { ms: (t4 - t3).toFixed(2) })
       }
 
       if (isStale()) return
 
       // Log errors from photos and videos queries
       if (photosResult.error) {
-        console.error('Error loading photos:', photosResult.error)
+        log.error('PROFILE', 'Error loading photos', photosResult.error)
       }
       if (videosResult.error) {
-        console.error('Error loading videos:', videosResult.error)
+        log.error('PROFILE', 'Error loading videos', videosResult.error)
       }
 
-      setVideos(videosResult.data || [])
-      setPhotos(photosResult.data || [])
+      // Hydrate global likes (my likes + real counts) in batch via LikesContext.
+      const rawVideos = videosResult.data || []
+      const rawPhotos = photosResult.data || []
+      setVideos(rawVideos)
+      setPhotos(rawPhotos)
+      try {
+        const videoIds = (rawVideos || []).map((v) => v?.id).filter(Boolean)
+        const photoIds = (rawPhotos || []).map((p) => p?.id).filter(Boolean)
+        if (videoIds.length > 0) void likes.hydrateForIds('video', videoIds)
+        if (photoIds.length > 0) void likes.hydrateForIds('photo', photoIds)
+      } catch {
+        // ignore
+      }
+
+      // Unblock the grid as soon as media arrives (reviews/services can load later).
+      if (!isStale()) setContentLoading(false)
 
       if (imageDebugOn()) {
-        console.log(
-          `[PROFILE] raw avatar=${String(profileData?.avatar || '').substring(0, 120)}...`
-        )
-        console.log(
-          `[PROFILE] raw cover_image=${String(profileData?.cover_image || '').substring(0, 120)}...`
-        )
+        log.debug('IMG', 'raw avatar', String(profileData?.avatar || '').substring(0, 120))
+        log.debug('IMG', 'raw cover_image', String(profileData?.cover_image || '').substring(0, 120))
       }
 
-      // PRÉ-CARREGAR apenas avatar + capa + PRIMEIROS 2 do grid (primeira linha) — e resolver storage:// via publicUrl estável
-      ;(async () => {
+      // Preload only the critical images, and keep it off the critical path.
+      ;(typeof window !== 'undefined' && window.requestIdleCallback
+        ? window.requestIdleCallback
+        : (cb) => setTimeout(cb, 60))(() => {
         const preloadUrls = new Set() // Dedupe: evita carregar mesma URL várias vezes
 
         const allContent = [
@@ -647,7 +865,7 @@ const Profile = () => {
         ]
 
         const t5 = imageDebugOn() ? performance.now() : 0
-        await Promise.all(
+        Promise.all(
           candidates.map(async (c) => {
             if (!c.raw) return
             const url = await resolveStorageUrl(c.raw, {
@@ -656,25 +874,24 @@ const Profile = () => {
             })
             if (url) preloadUrls.add(url)
           })
-        )
+        ).then(() => {
+          const preloadedImages = []
+          preloadUrls.forEach((url) => {
+            const img = new Image()
+            img.src = url
+            preloadedImages.push(img)
+          })
 
-        const preloadedImages = []
-        preloadUrls.forEach((url) => {
-          const img = new Image()
-          img.src = url
-          preloadedImages.push(img)
+          if (imageDebugOn()) {
+            const t6 = performance.now()
+            log.debug('IMG', 'Preloading unique images (critical)', {
+              count: preloadedImages.length,
+              ms: (t6 - t5).toFixed(2),
+            })
+            log.debug('IMG', 'Preload URLs', Array.from(preloadUrls))
+          }
         })
-
-        if (imageDebugOn()) {
-          const t6 = performance.now()
-          console.log(
-            `[PROFILE] 👁️ Preloading ${preloadedImages.length} unique images (critical) in ${(t6 - t5).toFixed(
-              2
-            )}ms`
-          )
-          console.log(`[PROFILE] 🔗 Preload URLs:`, Array.from(preloadUrls))
-        }
-      })()
+      })
 
       // Carregar dados secundários em paralelo (apenas contagens)
       const [reviewsResult, servicesResult] = await Promise.all([
@@ -686,7 +903,7 @@ const Profile = () => {
         supabase
           .from('services')
           .select(
-            'id, title, price, price_unit, category, image, views, bookings_count'
+            'id, title, description, price, price_unit, category, image, views, bookings_count, work_area, duration, home_service, emergency_service, travel_service, overtime_service, available_hours, home_service_fee, emergency_service_fee, travel_fee, overtime_fee'
           )
           .eq('user_id', profileId)
           .eq('is_active', true)
@@ -705,43 +922,16 @@ const Profile = () => {
       setReviews(reviewsResult.data || [])
       setServices(servicesResult.data || [])
 
-      // Carregar apenas contadores essenciais em paralelo
-      const countersPromises = [
-        supabase
-          .from('follows')
-          .select('*', { count: 'exact', head: true })
-          .eq('following_id', profileId),
-        supabase
-          .from('follows')
-          .select('*', { count: 'exact', head: true })
-          .eq('follower_id', profileId),
-      ]
-
-      // Adicionar verificação de follow apenas se necessário
-      if (currentUser && currentUser.id !== profileId) {
-        countersPromises.push(
-          supabase
-            .from('follows')
-            .select('id')
-            .eq('follower_id', currentUser.id)
-            .eq('following_id', profileId)
-            .maybeSingle()
-        )
-      }
-
-      const countersResults = await Promise.all(countersPromises)
-
-      setFollowersCount(countersResults[0].count || 0)
-      setFollowingCount(countersResults[1].count || 0)
-
-      if (countersResults[2]) {
-        setIsFollowing(!!countersResults[2].data)
-      }
-
-      // Atualizar o state do usuário com todos os dados calculados
-      setUser(profileData)
+      // Atualizar o state do usuário com todos os dados calculados (sem perder name/display)
+      setUser((prev) => ({
+        ...(prev || {}),
+        ...profileData,
+        name: display,
+        display_name: display,
+        coverImage: profileData?.cover_image,
+      }))
     } catch (error) {
-      console.error('Erro ao carregar perfil:', error)
+      log.error('PROFILE', 'Erro ao carregar perfil', error)
       if (!isStale()) setProfileLoading(false) // Libera render mesmo com erro
     } finally {
       if (!isStale()) setContentLoading(false)
@@ -767,6 +957,35 @@ const Profile = () => {
     setSelectedContent(content)
     setIsContentModalOpen(true)
 
+    // Prefetch current + neighbors (helps avoid "—" on fast swipe)
+    try {
+      const list = [
+        ...photos.map((p) => ({ ...p, type: 'photo' })),
+        ...videos.map((v) => ({ ...v, type: 'video' })),
+      ]
+      const currentId = String(content?.id ?? '')
+      const currentType = String(content?.type ?? '')
+      const idx = list.findIndex(
+        (item) => String(item?.id ?? '') === currentId && String(item?.type ?? '') === currentType
+      )
+
+      const candidates = [list[idx], list[idx - 1], list[idx + 1]].filter(Boolean)
+      const videoIds = []
+      const photoIds = []
+      for (const c of candidates) {
+        const id = c?.id
+        if (!id) continue
+        const isPhoto = c?.type === 'photo'
+        if (isPhoto) photoIds.push(id)
+        else videoIds.push(id)
+      }
+
+      if (videoIds.length) void likes.hydrateForIds('video', videoIds)
+      if (photoIds.length) void likes.hydrateForIds('photo', photoIds)
+    } catch {
+      // ignore
+    }
+
     const contentType = content?.type === 'photo' ? 'photo' : 'video'
     updateSearchParams(
       (p) => {
@@ -775,6 +994,30 @@ const Profile = () => {
       },
       { replace: false }
     )
+  }
+
+  const navigateProfileContentByDelta = (delta) => {
+    if (!selectedContent) return
+    const list = [
+      ...photos.map((p) => ({ ...p, type: 'photo' })),
+      ...videos.map((v) => ({ ...v, type: 'video' })),
+    ]
+    if (list.length === 0) return
+
+    const currentId = String(selectedContent?.id ?? '')
+    const currentType = String(selectedContent?.type ?? '')
+    const idx = list.findIndex(
+      (item) => String(item?.id ?? '') === currentId && String(item?.type ?? '') === currentType
+    )
+    if (idx < 0) return
+
+    let next = list[idx + delta]
+    if (!next) {
+      if (delta > 0) next = list[0]
+      else if (delta < 0) next = list[list.length - 1]
+    }
+    if (!next) return
+    handleOpenContentModal(next)
   }
 
   const handleCloseContentModal = () => {
@@ -824,7 +1067,46 @@ const Profile = () => {
 
       handleCloseContentModal()
     } catch (error) {
-      console.error('Erro ao excluir conteúdo:', error)
+      log.error('CONTENT', 'Erro ao excluir conteúdo', error)
+      toast({
+        title: 'Erro ao excluir',
+        description: error?.message || 'Não foi possível excluir. Tente novamente.',
+        variant: 'destructive',
+      })
+    }
+  }
+
+  const handleDeleteService = async (serviceId) => {
+    if (!currentUser?.id) {
+      toast({
+        title: 'Login necessário',
+        description: 'Você precisa estar logado para excluir.',
+        variant: 'destructive',
+      })
+      return
+    }
+    if (!serviceId) return
+
+    const ok = window.confirm('Tem certeza que deseja excluir este serviço?')
+    if (!ok) return
+
+    try {
+      const { error } = await supabase
+        .from('services')
+        .update({ is_active: false })
+        .eq('id', serviceId)
+        .eq('user_id', currentUser.id)
+
+      if (error) throw error
+
+      setServices((prev) => prev.filter((s) => s.id !== serviceId))
+      toast({
+        title: 'Serviço removido',
+        description: 'O serviço foi removido com sucesso.',
+        variant: 'success',
+      })
+    } catch (error) {
+      log.error('SERVICE', 'Erro ao excluir serviço', error)
       toast({
         title: 'Erro ao excluir',
         description: error?.message || 'Não foi possível excluir. Tente novamente.',
@@ -891,7 +1173,7 @@ const Profile = () => {
         variant: 'success',
       })
     } catch (error) {
-      console.error('Erro ao editar conteúdo:', error)
+      log.error('CONTENT', 'Erro ao editar conteúdo', error)
       toast({
         title: 'Erro ao editar',
         description: error?.message || 'Não foi possível salvar. Tente novamente.',
@@ -901,7 +1183,7 @@ const Profile = () => {
   }
 
   const handleContentUploaded = (newContent) => {
-    if (import.meta.env.DEV) console.log('New content uploaded:', newContent)
+    if (import.meta.env.DEV) log.debug('PROFILE', 'New content uploaded', newContent)
 
     // Atualizar estado baseado no tipo de conteúdo
     if (newContent.type === 'photo') {
@@ -1026,7 +1308,7 @@ const Profile = () => {
           followersCount={followersCount}
           followingCount={followingCount}
           isFollowing={isFollowing}
-          onFollowChange={loadUserProfile}
+          onFollowChange={refreshFollowCounters}
         />
         <Tabs
           value={activeTab}
@@ -1070,18 +1352,18 @@ const Profile = () => {
                         const hash = JSON.stringify(first4)
                         if (lastGridLogRef.current !== hash) {
                           lastGridLogRef.current = hash
-                          console.log('[GRID] 🔗 First 4 content items:', first4)
+                            log.debug('IMG', 'First 4 content items', first4)
                         }
                       }
 
                       return allContent.map((item, index) =>
                         item.type === 'video' ? (
-                          <div
+                          <VideoGridItem
                             key={item.id}
+                            video={item}
+                            index={index}
                             onClick={() => handleOpenContentModal(item)}
-                          >
-                            <VideoGridItem video={item} index={index} />
-                          </div>
+                          />
                         ) : (
                           <PhotoGridItem
                             key={item.id}
@@ -1187,8 +1469,7 @@ const Profile = () => {
                                     className="text-red-600"
                                     onClick={(e) => {
                                       e.stopPropagation()
-                                      if (import.meta.env.DEV)
-                                        console.log('Deletar serviço:', service.id)
+                                      handleDeleteService(service.id)
                                     }}
                                   >
                                     <Trash2 size={14} className="mr-2" />
@@ -1407,6 +1688,28 @@ const Profile = () => {
           }}
           service={selectedService}
           professional={{ ...user, isOwnProfile }}
+          onEditService={(svc) => {
+            const full =
+              svc?.id && Array.isArray(services)
+                ? services.find((s) => String(s.id) === String(svc.id)) || svc
+                : svc
+            // Abre o form e fecha os detalhes numa única transição de URL/estado,
+            // evitando corrida com location.search desatualizado.
+            setEditingService(full)
+            setIsServiceFormOpen(true)
+            setIsServiceDetailsOpen(false)
+            setSelectedService(null)
+
+            updateSearchParams(
+              (p) => {
+                p.set('serviceForm', '1')
+                if (full?.id) p.set('editService', String(full.id))
+                else p.delete('editService')
+                p.delete('service')
+              },
+              { replace: false }
+            )
+          }}
         />
         <ContentViewModal
           isOpen={isContentModalOpen}
@@ -1415,6 +1718,8 @@ const Profile = () => {
           user={user}
           onDelete={handleDeleteContent}
           onEdit={handleEditContent}
+          onRequestNext={() => navigateProfileContentByDelta(1)}
+          onRequestPrev={() => navigateProfileContentByDelta(-1)}
         />
       </div>
 

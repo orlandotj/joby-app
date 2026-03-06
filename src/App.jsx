@@ -5,17 +5,19 @@ import {
   Route,
   Navigate,
   useLocation,
+  useNavigate,
 } from 'react-router-dom'
 import { Toaster } from '@/components/ui/toaster'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Loader2 } from 'lucide-react'
+import { log } from '@/lib/logger'
 
-// Layouts
-import MainLayout from '@/layouts/MainLayout'
+// Layouts (lazy para reduzir o bundle inicial)
+const MainLayout = lazy(() => import('@/layouts/MainLayout'))
 
-// Páginas principais (carregadas imediatamente)
-import Feed from '@/pages/Feed'
-import Login from '@/pages/Login'
+// Páginas principais (lazy para reduzir o chunk principal)
+const Feed = lazy(() => import('@/pages/Feed'))
+const Login = lazy(() => import('@/pages/Login'))
 
 // Páginas com lazy loading
 const Profile = lazy(() => import('@/pages/Profile'))
@@ -40,6 +42,8 @@ const Notifications = lazy(() => import('@/pages/Notifications'))
 // Context
 import { AuthProvider } from '@/contexts/AuthContext'
 import { ThemeProvider } from '@/contexts/ThemeContext'
+import { LikesProvider } from '@/contexts/LikesContext'
+import { CommentsMetaProvider } from '@/contexts/CommentsMetaContext'
 
 // Loading component para Suspense
 const PageLoader = () => (
@@ -50,7 +54,19 @@ const PageLoader = () => (
 
 const RedirectToMeEdit = () => {
   const location = useLocation()
-  return <Navigate to={`/me/edit${location.search || ''}`} replace />
+  const navigate = useNavigate()
+
+  useEffect(() => {
+    const dest = `/me/edit${location.search || ''}`
+    try {
+      if (import.meta.env.DEV) log.debug('NAV', dest, 'app:redirect_profile_edit', new Error().stack)
+    } catch {
+      // ignore
+    }
+    navigate(dest, { replace: true })
+  }, [location.search, navigate])
+
+  return null
 }
 
 function App() {
@@ -103,43 +119,51 @@ function App() {
     <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <ThemeProvider>
         <AuthProvider>
-          <AnimatePresence mode="wait">
-            <Suspense fallback={<PageLoader />}>
-              <Routes>
-                <Route path="/login" element={<Login />} />
-                <Route path="/register" element={<Register />} />
-                <Route path="/debug-supabase" element={<DebugSupabase />} />
-                <Route path="/" element={<MainLayout />}>
-                  <Route index element={<Feed />} />
-                  <Route path="explore" element={<Explore />} />
-                  <Route path="profile/edit" element={<RedirectToMeEdit />} />
-                  <Route path="profile/:id" element={<Profile />} />
-                  <Route path="profile/:id/edit" element={<RedirectToMeEdit />} />
-                  <Route path="me/edit" element={<ProfileEdit />} />
-                  <Route path="settings" element={<Settings />} />
-                  <Route path="terms" element={<TermsOfService />} />
-                  <Route path="/termos" element={<TermsOfService />} />
-                  <Route path="privacy" element={<PrivacyPolicy />} />
-                  <Route path="messages" element={<Messages />} />
-                  <Route
-                    path="service-confirmation"
-                    element={<ServiceConfirmation />}
-                  />
-                  <Route path="work-timer/:jobId" element={<WorkTimer />} />
-                  <Route path="wallet" element={<Wallet />} />
-                  <Route
-                    path="my-availability"
-                    element={<ProfessionalAvailability />}
-                  />
-                  <Route path="work-requests" element={<WorkRequests />} />
-                  <Route path="notifications" element={<Notifications />} />
-                </Route>
-                <Route path="/404" element={<NotFound />} />
-                <Route path="*" element={<Navigate to="/404" replace />} />
-              </Routes>
-            </Suspense>
-          </AnimatePresence>
-          <Toaster />
+          <LikesProvider>
+            <CommentsMetaProvider>
+              <AnimatePresence mode="wait">
+                <Suspense fallback={<PageLoader />}>
+                  <Routes>
+                    <Route path="/login" element={<Login />} />
+                    <Route path="/register" element={<Register />} />
+                    <Route path="/debug-supabase" element={<DebugSupabase />} />
+                    <Route path="/" element={<MainLayout />}>
+                      <Route index element={<Feed />} />
+                      <Route path="explore" element={<Explore />} />
+                      <Route path="profile/edit" element={<RedirectToMeEdit />} />
+                      <Route path="profile/:id" element={<Profile />} />
+                      <Route path="profile/:id/edit" element={<RedirectToMeEdit />} />
+                      <Route path="me/edit" element={<ProfileEdit />} />
+                      <Route path="settings" element={<Settings />} />
+                      <Route path="terms" element={<TermsOfService />} />
+                      <Route path="/termos" element={<TermsOfService />} />
+                      <Route path="privacy" element={<PrivacyPolicy />} />
+                      <Route path="messages" element={<Messages />} />
+                      <Route
+                        path="service-confirmation"
+                        element={<ServiceConfirmation />}
+                      />
+                      <Route path="work-timer/:jobId" element={<WorkTimer />} />
+                      <Route path="wallet" element={<Wallet />} />
+                      <Route
+                        path="my-availability"
+                        element={<ProfessionalAvailability />}
+                      />
+                      <Route path="work-requests" element={<WorkRequests />} />
+                      <Route
+                        path="work-requests/:requestId"
+                        element={<WorkRequests />}
+                      />
+                      <Route path="notifications" element={<Notifications />} />
+                    </Route>
+                    <Route path="/404" element={<NotFound />} />
+                    <Route path="*" element={<Navigate to="/404" replace />} />
+                  </Routes>
+                </Suspense>
+              </AnimatePresence>
+              <Toaster />
+            </CommentsMetaProvider>
+          </LikesProvider>
         </AuthProvider>
       </ThemeProvider>
     </Router>

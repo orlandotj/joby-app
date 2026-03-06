@@ -40,8 +40,10 @@ export async function searchProfiles(rawTerm, { limit = 12 } = {}) {
   const term = normalizeTerm(intent.term)
 
   const selectVariants = [
+    'id, username, avatar, profession, bio, location, rating, is_verified, created_at, experience_start_year, joby_since_year',
     'id, username, avatar, profession, bio, location, rating, is_verified, created_at',
     'id, username, avatar, profession, bio, location, rating, created_at',
+    'id, name, avatar, profession, bio, location, rating, is_verified, created_at, experience_start_year, joby_since_year',
     'id, name, avatar, profession, bio, location, rating, is_verified, created_at',
     'id, name, avatar, profession, bio, location, rating, created_at',
   ]
@@ -78,9 +80,12 @@ export async function searchServices(rawTerm, { limit = 12 } = {}) {
   const term = normalizeTerm(rawTerm)
 
   const selectVariants = [
-    `id, title, description, category, price, price_unit, image, is_active, created_at, user:user_id(id, username, name, avatar, profession, rating, location, can_offer_service, is_verified)`,
-    `id, title, description, category, price, price_unit, image, is_active, created_at, user:user_id(id, username, avatar, profession, rating, location, can_offer_service, is_verified)`,
-    `id, title, description, category, price, price_unit, image, is_active, created_at, user:user_id(id, name, avatar, profession, rating, location, can_offer_service, is_verified)`,
+    `id, title, description, category, price, price_unit, image, is_active, created_at, user:user_id(id, username, name, avatar, profession, rating, location, can_offer_service, is_verified, created_at, experience_start_year, joby_since_year)` ,
+    `id, title, description, category, price, price_unit, image, is_active, created_at, user:user_id(id, username, name, avatar, profession, rating, location, can_offer_service, is_verified, created_at)` ,
+    `id, title, description, category, price, price_unit, image, is_active, created_at, user:user_id(id, username, avatar, profession, rating, location, can_offer_service, is_verified, created_at, experience_start_year, joby_since_year)` ,
+    `id, title, description, category, price, price_unit, image, is_active, created_at, user:user_id(id, username, avatar, profession, rating, location, can_offer_service, is_verified, created_at)` ,
+    `id, title, description, category, price, price_unit, image, is_active, created_at, user:user_id(id, name, avatar, profession, rating, location, can_offer_service, is_verified, created_at, experience_start_year, joby_since_year)` ,
+    `id, title, description, category, price, price_unit, image, is_active, created_at, user:user_id(id, name, avatar, profession, rating, location, can_offer_service, is_verified, created_at)` ,
   ]
 
   const build = (select) => {
@@ -159,41 +164,77 @@ export async function searchVideos(rawTerm, { limit = 12, page = null } = {}) {
 
   // IMPORTANT: don't depend on optional columns (provider/comments_count). We'll try the richest query first,
   // then progressively fall back removing joins and missing columns.
-  const attempts = [
-    () => base(`id, url, title, description, thumbnail, video_type, views, likes, comments_count, created_at, user:user_id(id, username, name, avatar, profession)`, { orderCommentsCount: true }),
-    () => base(`id, url, title, description, thumbnail, video_type, views, likes, comments_count, created_at`, { orderCommentsCount: true }),
-    () => base(`id, url, title, description, thumbnail, video_type, views, likes, created_at, user:user_id(id, username, name, avatar, profession)`, { orderCommentsCount: false }),
-    () => base(`id, url, title, description, thumbnail, video_type, views, likes, created_at`, { orderCommentsCount: false }),
-  ]
-
-  let res = null
-  for (const run of attempts) {
-    const r = await run()
-    if (!r?.error) {
-      res = r
-      break
-    }
-    res = r
-    if (!isMissingColumnError(r.error)) break
+  const selectVariants = {
+    withUser: {
+      withCommentsCount: [
+        `id, url, provider, title, description, thumbnail_url, thumbnail, video_type, views, likes, comments_count, created_at, user:user_id(id, username, name, avatar, profession, location)`,
+        `id, url, provider, title, description, thumbnail, video_type, views, likes, comments_count, created_at, user:user_id(id, username, name, avatar, profession, location)`,
+        `id, url, title, description, thumbnail_url, thumbnail, video_type, views, likes, comments_count, created_at, user:user_id(id, username, name, avatar, profession, location)`,
+        `id, url, title, description, thumbnail, video_type, views, likes, comments_count, created_at, user:user_id(id, username, name, avatar, profession, location)`,
+      ],
+      withoutCommentsCount: [
+        `id, url, provider, title, description, thumbnail_url, thumbnail, video_type, views, likes, created_at, user:user_id(id, username, name, avatar, profession, location)`,
+        `id, url, provider, title, description, thumbnail, video_type, views, likes, created_at, user:user_id(id, username, name, avatar, profession, location)`,
+        `id, url, title, description, thumbnail_url, thumbnail, video_type, views, likes, created_at, user:user_id(id, username, name, avatar, profession, location)`,
+        `id, url, title, description, thumbnail, video_type, views, likes, created_at, user:user_id(id, username, name, avatar, profession, location)`,
+      ],
+    },
+    withoutUser: {
+      withCommentsCount: [
+        `id, url, provider, title, description, thumbnail_url, thumbnail, video_type, views, likes, comments_count, created_at`,
+        `id, url, provider, title, description, thumbnail, video_type, views, likes, comments_count, created_at`,
+        `id, url, title, description, thumbnail_url, thumbnail, video_type, views, likes, comments_count, created_at`,
+        `id, url, title, description, thumbnail, video_type, views, likes, comments_count, created_at`,
+      ],
+      withoutCommentsCount: [
+        `id, url, provider, title, description, thumbnail_url, thumbnail, video_type, views, likes, created_at`,
+        `id, url, provider, title, description, thumbnail, video_type, views, likes, created_at`,
+        `id, url, title, description, thumbnail_url, thumbnail, video_type, views, likes, created_at`,
+        `id, url, title, description, thumbnail, video_type, views, likes, created_at`,
+      ],
+    },
   }
 
-  if (!res) res = { data: [], error: null }
+  const tryQuery = async ({ includeUser, includeCommentsCount }) => {
+    const variants = includeUser
+      ? includeCommentsCount
+        ? selectVariants.withUser.withCommentsCount
+        : selectVariants.withUser.withoutCommentsCount
+      : includeCommentsCount
+      ? selectVariants.withoutUser.withCommentsCount
+      : selectVariants.withoutUser.withoutCommentsCount
+
+    const res = await trySelect(
+      (select) => base(select, { orderCommentsCount: includeCommentsCount }),
+      variants
+    )
+
+    // If includeUser was requested but RLS blocks the join, return as-is so caller can decide fallback.
+    return res
+  }
+
+  // 1) Try with user + comments_count
+  // 2) Then without comments_count
+  // 3) If join is blocked (RLS), try without user (also tolerant to missing thumbnail_url)
+  let res = await tryQuery({ includeUser: true, includeCommentsCount: true })
+  if (res?.error && isMissingColumnError(res.error)) {
+    res = await tryQuery({ includeUser: true, includeCommentsCount: false })
+  }
+
   if (res?.error && isPermissionDeniedError(res.error)) {
-    // Se o join do autor falhar, ainda retornamos os vídeos sem user
-    const fallback = await supabase
-      .from('videos')
-      .select('id, url, title, description, thumbnail, video_type, views, likes, comments_count, created_at')
-      .eq('is_public', true)
-      .range(
-        typeof page === 'number' && Number.isFinite(page) && page >= 0 ? page * limit : 0,
-        typeof page === 'number' && Number.isFinite(page) && page >= 0 ? page * limit + limit - 1 : limit - 1
-      )
-      .order('views', { ascending: false, nullsFirst: false })
-      .order('likes', { ascending: false, nullsFirst: false })
-      .order('created_at', { ascending: false })
+    // Join blocked: retry without user embed
+    const r1 = await tryQuery({ includeUser: false, includeCommentsCount: true })
+    if (!r1?.error) {
+      return { data: r1?.data || [], error: null, blocked: true }
+    }
 
-    return { data: fallback?.data || [], error: fallback?.error || res.error, blocked: true }
+    // If comments_count doesn't exist (or other missing optional), drop it.
+    const r2 = isMissingColumnError(r1?.error)
+      ? await tryQuery({ includeUser: false, includeCommentsCount: false })
+      : r1
+    return { data: r2?.data || [], error: r2?.error || res.error, blocked: true }
   }
+
   return { data: res?.data || [], error: res?.error || null }
 }
 
@@ -219,9 +260,36 @@ export async function searchPhotos(rawTerm, { limit = 12 } = {}) {
   // IMPORTANT: don't depend on optional columns (provider/comments_count). We'll try the richest query first,
   // then progressively fall back removing joins and missing columns.
   const attempts = [
-    () => base(`id, url, caption, likes, comments_count, created_at, user:user_id(id, username, name, avatar, profession)`, { orderCommentsCount: true }),
+    () =>
+      base(
+        `id, url, image_full_url, image_thumb_url, width_full, height_full, width_thumb, height_thumb, caption, likes, comments_count, created_at, user:user_id(id, username, name, avatar, profession)`,
+        { orderCommentsCount: true }
+      ),
+    () =>
+      base(
+        `id, url, image_full_url, image_thumb_url, width_full, height_full, width_thumb, height_thumb, caption, likes, comments_count, created_at`,
+        { orderCommentsCount: true }
+      ),
+    () =>
+      base(
+        `id, url, image_full_url, image_thumb_url, width_full, height_full, width_thumb, height_thumb, caption, likes, created_at, user:user_id(id, username, name, avatar, profession)`,
+        { orderCommentsCount: false }
+      ),
+    () =>
+      base(
+        `id, url, image_full_url, image_thumb_url, width_full, height_full, width_thumb, height_thumb, caption, likes, created_at`,
+        { orderCommentsCount: false }
+      ),
+    () =>
+      base(
+        `id, url, caption, likes, comments_count, created_at, user:user_id(id, username, name, avatar, profession)`,
+        { orderCommentsCount: true }
+      ),
     () => base(`id, url, caption, likes, comments_count, created_at`, { orderCommentsCount: true }),
-    () => base(`id, url, caption, likes, created_at, user:user_id(id, username, name, avatar, profession)`, { orderCommentsCount: false }),
+    () =>
+      base(`id, url, caption, likes, created_at, user:user_id(id, username, name, avatar, profession)`, {
+        orderCommentsCount: false,
+      }),
     () => base(`id, url, caption, likes, created_at`, { orderCommentsCount: false }),
   ]
 

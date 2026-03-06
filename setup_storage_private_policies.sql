@@ -59,6 +59,7 @@ using (bucket_id = 'profile-photos');
 -- photos/videos posts: <uid>/<timestamp>.<ext>
 -- photos message attachments: message-attachments/<uid>/<timestamp>.<ext>
 -- photos service images: service-images/<uid>-<timestamp>.<ext>
+-- photos service request attachments: service-attachments/<uid>/<request_id>/<uuid>.<ext>
 -- profile-photos avatar: avatar/<uid>-<timestamp>.<ext>
 -- profile-photos cover: cover/<uid>-<timestamp>.<ext>
 -- =========================
@@ -75,6 +76,8 @@ with check (
   and (
     name like auth.uid() || '/%'
     or name like 'message-attachments/' || auth.uid() || '/%'
+    or name like 'booking-attachments/' || auth.uid() || '/%'
+    or name like 'service-attachments/' || auth.uid() || '/%'
     or name like 'service-images/' || auth.uid() || '-%'
   )
 );
@@ -88,6 +91,8 @@ using (
   and (
     name like auth.uid() || '/%'
     or name like 'message-attachments/' || auth.uid() || '/%'
+    or name like 'booking-attachments/' || auth.uid() || '/%'
+    or name like 'service-attachments/' || auth.uid() || '/%'
     or name like 'service-images/' || auth.uid() || '-%'
   )
 )
@@ -96,6 +101,8 @@ with check (
   and (
     name like auth.uid() || '/%'
     or name like 'message-attachments/' || auth.uid() || '/%'
+    or name like 'booking-attachments/' || auth.uid() || '/%'
+    or name like 'service-attachments/' || auth.uid() || '/%'
     or name like 'service-images/' || auth.uid() || '-%'
   )
 );
@@ -109,6 +116,8 @@ using (
   and (
     name like auth.uid() || '/%'
     or name like 'message-attachments/' || auth.uid() || '/%'
+    or name like 'booking-attachments/' || auth.uid() || '/%'
+    or name like 'service-attachments/' || auth.uid() || '/%'
     or name like 'service-images/' || auth.uid() || '-%'
   )
 );

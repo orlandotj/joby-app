@@ -54,3 +54,15 @@ Security recommendation:
 
 - Keep minimal public columns in `profiles`.
 - Use RLS to restrict access and never expose admin-level keys to the client.
+
+## Required RPCs (like counts)
+
+The app uses batch RPCs to fetch the *real* like counts (COUNT on the likes tables) for performance and consistency.
+
+Run these SQL scripts in the Supabase SQL Editor:
+
+- `setup_get_video_like_counts_rpc.sql` → `public.get_video_like_counts(video_ids uuid[])`
+- `setup_get_photo_like_counts_rpc.sql` → `public.get_photo_like_counts(photo_ids uuid[])`
+- `setup_get_comment_like_counts_rpc.sql` → `public.get_comment_like_counts(comment_ids uuid[])`
+
+If one of these RPCs is missing, the client may log `PGRST202` (function not found in schema cache) and show like counts as `—`.

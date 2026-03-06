@@ -1,6 +1,8 @@
 /**
  * Registra o Service Worker para funcionalidade PWA
  */
+import { log } from '@/lib/logger'
+
 export const registerServiceWorker = () => {
   // Em desenvolvimento (Vite) o Service Worker costuma atrapalhar com cache e HMR.
   // Registramos apenas em produção.
@@ -13,14 +15,21 @@ export const registerServiceWorker = () => {
       navigator.serviceWorker
         .register('/service-worker.js')
         .then((registration) => {
+          // Checa update imediatamente (importante após deploy)
+          try {
+            registration.update()
+          } catch {
+            // ignore
+          }
+
           // Verificar atualizações periodicamente
           setInterval(() => {
             registration.update()
-          }, 1000 * 60 * 60) // A cada 1 hora
+          }, 1000 * 60 * 10) // A cada 10 minutos
         })
         .catch((error) => {
           // Em produção, ainda é ok falhar sem quebrar o app.
-          console.warn('Falha ao registrar Service Worker:', error)
+          log.warn('SW', 'Falha ao registrar Service Worker:', error)
         })
     })
 
@@ -42,7 +51,7 @@ export const unregisterServiceWorker = () => {
       })
       .catch((error) => {
         if (import.meta.env.DEV) {
-          console.error('Erro ao desregistrar Service Worker:', error)
+          log.error('SW', 'Erro ao desregistrar Service Worker:', error)
         }
       })
   }

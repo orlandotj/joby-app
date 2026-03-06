@@ -1,5 +1,6 @@
 import React from 'react'
 import { useNavigate } from 'react-router-dom'
+import { log } from '@/lib/logger'
 import {
   Dialog,
   DialogContent,
@@ -12,6 +13,22 @@ import { Button } from '@/components/ui/button'
 
 const DocsRequiredDialog = ({ open, onOpenChange }) => {
   const navigate = useNavigate()
+
+  const navDebugLog = (to, reason) => {
+    const dest = String(to || '')
+    if (!dest) return
+    if (!dest.startsWith('/me/edit') && !dest.startsWith('/login')) return
+    try {
+      if (import.meta.env.DEV) log.debug('NAV', dest, reason, new Error().stack)
+    } catch {
+      // ignore
+    }
+  }
+
+  const navigateWithReason = (to, { reason, ...opts } = {}) => {
+    navDebugLog(to, reason)
+    navigate(to, opts)
+  }
 
   return (
     <Dialog open={!!open} onOpenChange={onOpenChange}>
@@ -30,7 +47,9 @@ const DocsRequiredDialog = ({ open, onOpenChange }) => {
             className="joby-gradient text-primary-foreground"
             onClick={() => {
               onOpenChange?.(false)
-              navigate('/me/edit?tab=personal')
+              navigateWithReason('/me/edit?tab=personal', {
+                reason: 'docs_required:go_to_personal_tab',
+              })
             }}
           >
             Ir para Informações pessoais

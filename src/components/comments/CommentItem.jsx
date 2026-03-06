@@ -4,15 +4,14 @@ import { Button } from '@/components/ui/button'
 import { ThumbsUp, Trash2 } from 'lucide-react'
 import { useResolvedStorageUrl } from '@/lib/storageUrl'
 import { formatTimeAgoPtBR } from './commentsUtils'
-
-const getInitial = (name) => (name ? String(name).trim().charAt(0).toUpperCase() : '?')
+import { getProfileDisplayName, getProfileInitial } from '@/lib/profileDisplay'
 
 export const CommentItem = ({ comment, currentUserId, onLike, likesEnabled, onDelete, isReply = false }) => {
   const avatarSrc = useResolvedStorageUrl(comment?.user?.avatar || '')
 
   const displayName = useMemo(() => {
-    return comment?.user?.name || comment?.user?.username || 'Usuário'
-  }, [comment?.user?.name, comment?.user?.username])
+    return getProfileDisplayName(comment?.user)
+  }, [comment?.user])
 
   const timeAgo = useMemo(() => formatTimeAgoPtBR(comment?.created_at), [comment?.created_at])
 
@@ -22,7 +21,7 @@ export const CommentItem = ({ comment, currentUserId, onLike, likesEnabled, onDe
     <div className="flex gap-3">
       <Avatar className={isReply ? 'h-7 w-7 mt-1' : 'h-8 w-8 mt-1'}>
         <AvatarImage src={avatarSrc} alt={displayName} />
-        <AvatarFallback className="bg-muted text-xs">{getInitial(displayName)}</AvatarFallback>
+        <AvatarFallback className="bg-muted text-xs">{getProfileInitial(comment?.user)}</AvatarFallback>
       </Avatar>
 
       <div className="flex-1 min-w-0">

@@ -367,6 +367,9 @@ END;
 $fn$;
 
 -- RPC: perfil privado do próprio usuário
+-- Observação: ao adicionar/remover colunas do RETURNS TABLE, o Postgres não permite alterar
+-- o tipo de retorno com CREATE OR REPLACE. Por isso, fazemos DROP e recriamos.
+DROP FUNCTION IF EXISTS public.get_my_profile_private();
 CREATE OR REPLACE FUNCTION public.get_my_profile_private()
 RETURNS TABLE (
   id uuid,
@@ -382,6 +385,18 @@ RETURNS TABLE (
   avatar text,
   cover_image text,
   location text,
+  address_cep text,
+  address_street text,
+  address_number text,
+  address_complement text,
+  address_neighborhood text,
+  address_city text,
+  address_state text,
+  address_lat double precision,
+  address_lng double precision,
+  address_formatted text,
+  address_source text,
+  address_updated_at timestamptz,
   areas text,
   updated_at timestamptz,
   created_at timestamptz
@@ -410,6 +425,18 @@ BEGIN
     p.avatar,
     p.cover_image,
     p.location,
+    p.address_cep,
+    p.address_street,
+    p.address_number,
+    p.address_complement,
+    p.address_neighborhood,
+    p.address_city,
+    p.address_state,
+    p.address_lat,
+    p.address_lng,
+    p.address_formatted,
+    p.address_source,
+    p.address_updated_at,
     p.areas,
     p.updated_at,
     p.created_at
@@ -480,6 +507,16 @@ DECLARE
     'avatar',
     'cover_image',
     'location',
+    'address_cep',
+    'address_street',
+    'address_number',
+    'address_complement',
+    'address_neighborhood',
+    'address_city',
+    'address_state',
+    'address_lat',
+    'address_lng',
+    'address_formatted',
     'areas',
     'created_at',
     'updated_at',

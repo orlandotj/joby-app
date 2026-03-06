@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { log } from '@/lib/logger'
 import { supabase } from '@/lib/supabaseClient'
 
 const cache = new Map()
@@ -134,6 +135,31 @@ const tryParseStorageRef = (raw) => {
     return null
   }
 
+  // Legacy plain bucket/path (common in old rows):
+  // - thumbnails/<path>
+  // - photos/<path>
+  // - profile-photos/<path>
+  // Also tolerate route-relative prefixes like profile/thumbnails/<path>
+  // (which would otherwise resolve to /profile/thumbnails/... and 404).
+  try {
+    const knownBuckets = new Set(['thumbnails', 'photos', 'profile-photos', 'videos'])
+
+    let p = value.replace(/^\/+/, '')
+    if (p.startsWith('profile/')) p = p.slice('profile/'.length)
+    if (p.startsWith('me/')) p = p.slice('me/'.length)
+
+    const slash = p.indexOf('/')
+    if (slash > 0) {
+      const bucket = p.slice(0, slash)
+      const path = p.slice(slash + 1)
+      if (knownBuckets.has(bucket) && path) {
+        return { bucket, path, original: value }
+      }
+    }
+  } catch {
+    // ignore
+  }
+
   return null
 }
 
@@ -147,12 +173,18 @@ const encodePathPreserveSlashes = (value) => {
     .join('/')
 }
 
-const tryParseCloudflareVideoKey = (raw) => {
+const toR2VideoKey = (raw) => {
   const value = normalize(raw)
-  if (!value) return null
+  if (!value) return ''
 
-  // If it's already an absolute URL, leave as-is.
-  if (/^https?:\/\//i.test(value)) return null
+  // Legacy: storage://videos/<path> (treat as R2 key).
+  const parsed = tryParseStorageRef(value)
+  if (parsed && parsed.bucket === 'videos' && parsed.path) {
+    let p = String(parsed.path || '').trim().replace(/^\/+/, '')
+    if (p.startsWith('profile/')) p = p.slice('profile/'.length)
+    if (!p.startsWith('videos/')) p = `videos/${p}`
+    return p
+  }
 
   // Normalize common relative forms that show up as 404s:
   // - videos/<user>/<file>
@@ -161,14 +193,34 @@ const tryParseCloudflareVideoKey = (raw) => {
   // - /profile/videos/<user>/<file>
   let path = value.replace(/^\/+/, '')
   if (path.startsWith('profile/')) path = path.slice('profile/'.length)
-  if (!path.startsWith('videos/')) return null
+  if (!path.startsWith('videos/')) return ''
+  return path
+}
 
-  return { r2Key: path }
+// Project rule (JOBY): ALL videos are served via Cloudflare Worker streaming endpoint.
+// This is synchronous (no Supabase calls) and safe to run only when the UI decides to load video.
+export const buildR2VideoPlaybackUrl = (rawKey) => {
+  const r2Key = toR2VideoKey(rawKey)
+  if (!r2Key) return ''
+  const encoded = encodePathPreserveSlashes(r2Key)
+  return buildWorkerUrl(`/video/${encoded}`)
+}
+
+const tryParseCloudflareVideoKey = (raw, provider) => {
+  const value = normalize(raw)
+  if (!value) return null
+
+  // If it's already an absolute URL, leave as-is.
+  if (/^https?:\/\//i.test(value)) return null
+
+  const r2Key = toR2VideoKey(value)
+  if (!r2Key) return null
+  return { r2Key }
 }
 
 export const resolveStorageUrl = async (
   raw,
-  { expiresIn = 3600, preferPublic = false, debugLabel = '' } = {}
+  { expiresIn = 3600, preferPublic = false, debugLabel = '', provider = null } = {}
 ) => {
   const value = normalize(raw)
   if (!value) return ''
@@ -177,7 +229,7 @@ export const resolveStorageUrl = async (
   const t0 = debugOn ? performance.now() : 0
 
   // Cloudflare R2 video keys: map to Worker playback endpoint.
-  const videoKey = tryParseCloudflareVideoKey(value)
+  const videoKey = tryParseCloudflareVideoKey(value, provider)
   if (videoKey) {
     const encoded = encodePathPreserveSlashes(videoKey.r2Key)
     return buildWorkerUrl(`/video/${encoded}`)
@@ -193,8 +245,9 @@ export const resolveStorageUrl = async (
   if (cached && cached.expiresAt > now) {
     if (debugOn) {
       const t1 = performance.now()
-      console.log(
-        `[URL] (cache) ${debugLabel || ''} ${parsed.bucket}/${parsed.path} -> ${cached.url.substring(0, 80)}... in ${(
+      log.debug(
+        'URL',
+        `(cache) ${debugLabel || ''} ${parsed.bucket}/${parsed.path} -> ${cached.url.substring(0, 80)}... in ${(
           t1 - t0
         ).toFixed(2)}ms`
       )
@@ -209,8 +262,9 @@ export const resolveStorageUrl = async (
     cache.set(key, persisted)
     if (debugOn) {
       const t1 = performance.now()
-      console.log(
-        `[URL] (persist) ${debugLabel || ''} ${parsed.bucket}/${parsed.path} -> ${String(
+      log.debug(
+        'URL',
+        `(persist) ${debugLabel || ''} ${parsed.bucket}/${parsed.path} -> ${String(
           persisted.url
         ).substring(0, 80)}... in ${(t1 - t0).toFixed(2)}ms`
       )
@@ -221,7 +275,12 @@ export const resolveStorageUrl = async (
   // IMPORTANT: If the bucket is public, prefer a stable public URL (cache-friendly).
   // If it's private, we still stabilize by persisting the signed URL across reloads.
   const publicBuckets = new Set(['profile-photos', 'photos', 'thumbnails'])
-  const shouldPreferPublic = publicBuckets.has(parsed.bucket)
+  // IMPORTANT: message attachments must work even when the bucket is PRIVATE.
+  // For message-attachments/* we prefer signed URLs (public URL can 404 on private buckets
+  // and new tabs/downloads don't carry Authorization headers).
+  const isMessageAttachment =
+    parsed.bucket === 'photos' && String(parsed.path || '').startsWith('message-attachments/')
+  const shouldPreferPublic = publicBuckets.has(parsed.bucket) && !isMessageAttachment
 
   if (shouldPreferPublic) {
     try {
@@ -236,8 +295,9 @@ export const resolveStorageUrl = async (
 
         if (debugOn) {
           const t1 = performance.now()
-          console.log(
-            `[URL] (public) ${debugLabel || ''} ${parsed.bucket}/${parsed.path} -> ${publicUrl.substring(
+          log.debug(
+            'URL',
+            `(public) ${debugLabel || ''} ${parsed.bucket}/${parsed.path} -> ${publicUrl.substring(
               0,
               80
             )}... in ${(t1 - t0).toFixed(2)}ms`
@@ -268,8 +328,9 @@ export const resolveStorageUrl = async (
 
       if (debugOn) {
         const t1 = performance.now()
-        console.log(
-          `[URL] (signed) ${debugLabel || ''} ${parsed.bucket}/${parsed.path} -> ${signedUrl.substring(
+        log.debug(
+          'URL',
+          `(signed) ${debugLabel || ''} ${parsed.bucket}/${parsed.path} -> ${signedUrl.substring(
             0,
             80
           )}... in ${(t1 - t0).toFixed(2)}ms`
@@ -291,7 +352,9 @@ export const resolveStorageUrl = async (
   }
 
   // Last resort: keep original (may already be public)
-  return parsed.original
+  // IMPORTANT: never return storage:// (or legacy bucket/path) to the DOM.
+  // Browsers can't load storage://, and legacy bucket/path would 404 as a relative URL.
+  return ''
 }
 
 export const useResolvedStorageUrl = (raw, options) => {
@@ -303,8 +366,10 @@ export const useResolvedStorageUrl = (raw, options) => {
   const stableKey = useMemo(() => {
     const expiresIn = typeof opts.expiresIn === 'number' ? opts.expiresIn : 3600
     const label = typeof opts.debugLabel === 'string' ? opts.debugLabel : ''
-    return `${input}::${expiresIn}::${label}`
-  }, [input, opts.expiresIn, opts.debugLabel])
+    const preferPublic = !!opts.preferPublic
+    const provider = typeof opts.provider === 'string' ? opts.provider : ''
+    return `${input}::${expiresIn}::${preferPublic ? 'pub' : 'sign'}::${provider}::${label}`
+  }, [input, opts.expiresIn, opts.preferPublic, opts.provider, opts.debugLabel])
 
   // OPTIMIZATION: Return public URLs and Cloudflare video keys synchronously (instant)
   const initialValue = useMemo(() => {
@@ -315,7 +380,7 @@ export const useResolvedStorageUrl = (raw, options) => {
     // If already a public Supabase URL, return immediately (no async needed!)
     if (input.includes('/storage/v1/object/public/')) {
       if (debugOn) {
-        console.log(`[URL] (instant public) ${opts?.debugLabel || ''} ${input.substring(0, 90)}...`)
+        log.debug('URL', `(instant public) ${opts?.debugLabel || ''} ${input.substring(0, 90)}...`)
       }
       return input
     }
@@ -323,7 +388,7 @@ export const useResolvedStorageUrl = (raw, options) => {
     // If already a signed URL, return immediately
     if (input.includes('/storage/v1/object/sign/')) {
       if (debugOn) {
-        console.log(`[URL] (instant signed) ${opts?.debugLabel || ''} ${input.substring(0, 90)}...`)
+        log.debug('URL', `(instant signed) ${opts?.debugLabel || ''} ${input.substring(0, 90)}...`)
       }
       return input
     }
@@ -331,18 +396,18 @@ export const useResolvedStorageUrl = (raw, options) => {
     // If absolute HTTP(S) URL, return immediately
     if (/^https?:\/\//i.test(input)) {
       if (debugOn) {
-        console.log(`[URL] (instant http) ${opts?.debugLabel || ''} ${input.substring(0, 90)}...`)
+        log.debug('URL', `(instant http) ${opts?.debugLabel || ''} ${input.substring(0, 90)}...`)
       }
       return input
     }
     
     // Cloudflare video keys can be resolved synchronously to the Worker playback endpoint.
-    const videoKey = tryParseCloudflareVideoKey(input)
+    const videoKey = tryParseCloudflareVideoKey(input, opts?.provider)
     if (videoKey) {
       const encoded = encodePathPreserveSlashes(videoKey.r2Key)
       const next = buildWorkerUrl(`/video/${encoded}`)
       if (debugOn) {
-        console.log(`[URL] (instant worker) ${opts?.debugLabel || ''} ${input} -> ${next}`)
+        log.debug('URL', `(instant worker) ${opts?.debugLabel || ''} ${input} -> ${next}`)
       }
       return next
     }
@@ -350,15 +415,19 @@ export const useResolvedStorageUrl = (raw, options) => {
     // storage:// format: try a synchronous stable value (public URL or persisted signed URL)
     const parsed = tryParseStorageRef(input)
     if (parsed) {
+      const isMessageAttachment =
+        parsed.bucket === 'photos' && String(parsed.path || '').startsWith('message-attachments/')
+
       const publicBuckets = new Set(['profile-photos', 'photos', 'thumbnails'])
-      if (publicBuckets.has(parsed.bucket)) {
+      if (publicBuckets.has(parsed.bucket) && !isMessageAttachment) {
         try {
           const { data } = supabase.storage.from(parsed.bucket).getPublicUrl(parsed.path)
           const publicUrl = data?.publicUrl || ''
           if (publicUrl) {
             if (debugOn) {
-              console.log(
-                `[URL] (instant public via storage://) ${opts?.debugLabel || ''} ${parsed.bucket}/${
+              log.debug(
+                'URL',
+                `(instant public via storage://) ${opts?.debugLabel || ''} ${parsed.bucket}/${
                   parsed.path
                 } -> ${publicUrl.substring(0, 90)}...`
               )
@@ -375,8 +444,9 @@ export const useResolvedStorageUrl = (raw, options) => {
       const persisted = readPersistedSignedUrl(signedKey)
       if (persisted && persisted.expiresAt > Date.now()) {
         if (debugOn) {
-          console.log(
-            `[URL] (instant persisted signed) ${opts?.debugLabel || ''} ${parsed.bucket}/${
+          log.debug(
+            'URL',
+            `(instant persisted signed) ${opts?.debugLabel || ''} ${parsed.bucket}/${
               parsed.path
             } -> ${String(persisted.url).substring(0, 90)}...`
           )
@@ -385,14 +455,14 @@ export const useResolvedStorageUrl = (raw, options) => {
       }
 
       if (debugOn) {
-        console.log(`[URL] (async storage://) ${opts?.debugLabel || ''} ${input}`)
+        log.debug('URL', `(async storage://) ${opts?.debugLabel || ''} ${input}`)
       }
       return ''
     }
     
     // Default: use as-is (might be a relative path or other format)
     return input
-  }, [input])
+  }, [input, opts?.provider, opts?.preferPublic, opts?.expiresIn, opts?.debugLabel])
 
   const [resolved, setResolved] = useState(initialValue)
 
@@ -415,23 +485,28 @@ export const useResolvedStorageUrl = (raw, options) => {
       const seq = (resolveCountRef.current += 1)
       const t0 = debugOn ? performance.now() : 0
       if (debugOn) {
-        console.log(
-          `[URL] resolve#${seq} START ${opts?.debugLabel || ''} raw=${String(input).substring(0, 90)}...`
+        log.debug(
+          'URL',
+          `resolve#${seq} START ${opts?.debugLabel || ''} raw=${String(input).substring(0, 90)}...`
         )
       }
 
       const next = await resolveStorageUrl(input, opts)
 
+      // Never set a storage:// URL on <img src>
+      const safe = String(next || '').trim().startsWith('storage://') ? '' : next
+
       if (debugOn) {
         const t1 = performance.now()
-        console.log(
-          `[URL] resolve#${seq} END ${opts?.debugLabel || ''} -> ${String(next).substring(0, 90)}... in ${(
+        log.debug(
+          'URL',
+          `resolve#${seq} END ${opts?.debugLabel || ''} -> ${String(next).substring(0, 90)}... in ${(
             t1 - t0
           ).toFixed(2)}ms`
         )
       }
 
-      if (!cancelled) setResolved(next)
+      if (!cancelled) setResolved(safe)
     }
 
     run()

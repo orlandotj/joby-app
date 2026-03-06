@@ -8,4 +8,8 @@
 
 <IfModule mod_headers.c>
   Header set X-Powered-By "Hostinger Horizons"
+
+  # CSP deve ser aplicada por header (não por meta) para não quebrar o Vite dev.
+  # Permite tiles de mapas (img-src https) e conexões HTTPS/WSS (Supabase/realtime).
+  Header set Content-Security-Policy "default-src 'self'; img-src 'self' https: data: blob:; style-src 'self' 'unsafe-inline' https:; script-src 'self'; connect-src 'self' https: wss:; font-src 'self' https: data:; media-src 'self' https: blob:; worker-src 'self' blob:;"
 </IfModule>

@@ -16,6 +16,7 @@ export const useUnreadNotificationsCount = (userId) => {
     let pollId = null
     let disabled = false
     let sub = null
+    let onChanged = null
     if (!safeUserId) {
       setUnreadCount(0)
       return
@@ -39,9 +40,10 @@ export const useUnreadNotificationsCount = (userId) => {
         // Count leve via supabase-js (badge não pode quebrar a navegação)
         const base = supabase
           .from('notifications')
-          .select('id', { head: true, count: 'exact' })
+          .select('id', { count: 'exact' })
           .eq('user_id', safeUserId)
           .eq('is_read', false)
+          .range(0, 0)
 
         let res = await base.is('archived_at', null)
         if (res.error && isMissingColumn42703(res.error)) {
@@ -71,6 +73,16 @@ export const useUnreadNotificationsCount = (userId) => {
 
     refresh()
 
+    onChanged = () => {
+      refresh()
+    }
+
+    try {
+      window.addEventListener('notifications:changed', onChanged)
+    } catch (_e) {
+      // ignore
+    }
+
     // Fallback: se realtime estiver bloqueado, ao menos atualiza periodicamente.
     pollId = setInterval(refresh, 30_000)
 
@@ -83,6 +95,11 @@ export const useUnreadNotificationsCount = (userId) => {
       isMounted = false
       sub?.unsubscribe?.()
       if (pollId) clearInterval(pollId)
+      try {
+        if (onChanged) window.removeEventListener('notifications:changed', onChanged)
+      } catch (_e) {
+        // ignore
+      }
     }
   }, [safeUserId])
 

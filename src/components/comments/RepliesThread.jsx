@@ -1,7 +1,6 @@
 import React, { useMemo, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { ChevronDown, ChevronUp } from 'lucide-react'
-import { CommentComposer } from './CommentComposer'
 import { CommentItem } from './CommentItem'
 
 export const RepliesThread = ({
@@ -12,7 +11,7 @@ export const RepliesThread = ({
   canReply,
   onToggle,
   onLoad,
-  onReply,
+  onReplyRequest,
   onLike,
   likesEnabled,
   onDelete,
@@ -32,32 +31,34 @@ export const RepliesThread = ({
     if (next && onLoad) await onLoad()
   }
 
-  const handleReply = async (text) => {
-    if (!text?.trim()) return
-    await onReply?.(text)
+  const requestReply = () => {
+    if (!canReply) return
+    onReplyRequest?.(parent)
   }
 
   return (
     <div className="mt-2">
       <div className="flex items-center gap-2">
-        <Button variant="ghost" size="sm" className="h-7 px-2" onClick={toggle}>
-          {open ? <ChevronUp size={16} className="mr-1" /> : <ChevronDown size={16} className="mr-1" />}
-          {label}
-        </Button>
+        {Number(parent?.replies_count) > 0 ? (
+          <Button variant="ghost" size="sm" className="h-7 px-2" onClick={toggle}>
+            {open ? <ChevronUp size={16} className="mr-1" /> : <ChevronDown size={16} className="mr-1" />}
+            {label}
+          </Button>
+        ) : (
+          <Button variant="ghost" size="sm" className="h-7 px-2" onClick={requestReply}>
+            {label}
+          </Button>
+        )}
+
+        {Number(parent?.replies_count) > 0 && canReply && (
+          <Button variant="ghost" size="sm" className="h-7 px-2" onClick={requestReply}>
+            Responder
+          </Button>
+        )}
       </div>
 
       {open && (
         <div className="mt-2 pl-11 space-y-3">
-          {canReply && (
-            <CommentComposer
-              currentUser={currentUser}
-              placeholder="Responder..."
-              submitting={false}
-              onSubmit={handleReply}
-              compact
-            />
-          )}
-
           {loading ? (
             <div className="text-xs text-muted-foreground py-2">Carregando respostas...</div>
           ) : (replies || []).length > 0 ? (

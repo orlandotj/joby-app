@@ -4,18 +4,22 @@ import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Send } from 'lucide-react'
 import { useResolvedStorageUrl } from '@/lib/storageUrl'
+import { getProfileDisplayName, getProfileInitial } from '@/lib/profileDisplay'
 
-const getInitial = (name) => (name ? String(name).trim().charAt(0).toUpperCase() : 'U')
-
-export const CommentComposer = ({
+export const CommentComposer = React.forwardRef(function CommentComposer(
+  {
   currentUser,
   placeholder = 'Adicione um comentário...',
   submitting,
   onSubmit,
   compact = true,
-}) => {
+    autoFocus = false,
+  },
+  ref
+) {
   const [value, setValue] = useState('')
   const avatarSrc = useResolvedStorageUrl(currentUser?.avatar || '')
+  const displayName = useMemo(() => getProfileDisplayName(currentUser), [currentUser])
 
   const canSend = useMemo(() => !!value.trim() && !submitting, [submitting, value])
 
@@ -29,9 +33,9 @@ export const CommentComposer = ({
   return (
     <div className="flex items-start gap-3">
       <Avatar className={compact ? 'h-8 w-8 mt-1' : 'h-9 w-9 mt-1'}>
-        <AvatarImage src={avatarSrc} alt={currentUser?.name} />
+        <AvatarImage src={avatarSrc} alt={displayName} />
         <AvatarFallback className="bg-primary text-primary-foreground text-xs">
-          {getInitial(currentUser?.name)}
+          {getProfileInitial(currentUser)}
         </AvatarFallback>
       </Avatar>
 
@@ -42,6 +46,8 @@ export const CommentComposer = ({
           onChange={(e) => setValue(e.target.value)}
           className={compact ? 'resize-none flex-1 min-h-[44px]' : 'resize-none flex-1 min-h-[56px]'}
           rows={2}
+          ref={ref}
+          autoFocus={autoFocus}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault()
@@ -65,4 +71,4 @@ export const CommentComposer = ({
       </div>
     </div>
   )
-}
+})

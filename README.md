@@ -103,7 +103,8 @@ cp .env.example .env
 
 # Edite o .env com suas credenciais
 VITE_SUPABASE_URL=https://seu-projeto.supabase.co
-VITE_SUPABASE_KEY=sua_chave_anon
+VITE_SUPABASE_ANON_KEY=sua_chave_anon
+# (compat) VITE_SUPABASE_KEY também é aceito
 ```
 
 ### 5. Testar Configuração
@@ -238,7 +239,8 @@ npm run build
 
 # Configure variáveis de ambiente:
 VITE_SUPABASE_URL=https://seu-projeto.supabase.co
-VITE_SUPABASE_KEY=sua_chave_anon
+VITE_SUPABASE_ANON_KEY=sua_chave_anon
+# (compat) VITE_SUPABASE_KEY também é aceito
 
 # Deploy
 vercel deploy --prod

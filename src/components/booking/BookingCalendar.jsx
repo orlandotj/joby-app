@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils';
 import { addMonths, subMonths, format, startOfMonth, endOfMonth, startOfWeek, endOfWeek, eachDayOfInterval, isSameMonth, isSameDay, isBefore, parseISO, getDay, addDays, setHours, setMinutes, isEqual } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { supabase } from '@/lib/supabaseClient';
 
 const BookingCalendar = ({ 
   professionalId, 
@@ -20,6 +21,7 @@ const BookingCalendar = ({
 }) => {
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [availableTimes, setAvailableTimes] = useState([]);
+  const [bookedTimes, setBookedTimes] = useState([]);
   
   const {
     monday, tuesday, wednesday, thursday, friday, saturday, sunday,
@@ -28,6 +30,44 @@ const BookingCalendar = ({
   } = professionalAvailability || {};
 
   const dayOfWeekConfig = [sunday, monday, tuesday, wednesday, thursday, friday, saturday];
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadBookedTimes = async () => {
+      if (!professionalId || !selectedDate) {
+        setBookedTimes([]);
+        return;
+      }
+
+      try {
+        const dateISO = format(selectedDate, 'yyyy-MM-dd');
+        const { data, error } = await supabase
+          .from('bookings')
+          .select('scheduled_time,status')
+          .eq('professional_id', professionalId)
+          .eq('scheduled_date', dateISO)
+          .in('status', ['pending', 'accepted'])
+          .not('scheduled_time', 'is', null);
+
+        if (error) throw error;
+        if (cancelled) return;
+
+        const taken = (data || [])
+          .map((b) => (b?.scheduled_time == null ? '' : String(b.scheduled_time)))
+          .filter(Boolean);
+
+        setBookedTimes(taken);
+      } catch (e) {
+        if (!cancelled) setBookedTimes([]);
+      }
+    };
+
+    loadBookedTimes();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedDate, professionalId]);
 
   const generateTimeSlots = (date) => {
     if (!date) return [];
@@ -44,16 +84,9 @@ const BookingCalendar = ({
     let currentTime = setMinutes(setHours(new Date(date), parseInt(dayConfig.start.split(':')[0], 10)), parseInt(dayConfig.start.split(':')[1], 10));
     const endTime = setMinutes(setHours(new Date(date), parseInt(dayConfig.end.split(':')[0], 10)), parseInt(dayConfig.end.split(':')[1], 10));
     
-    // Mock existing bookings (replace with actual data fetch)
-    const mockExistingBookings = [
-      // { date: '2025-06-10', time: '14:00' }, // Example
-    ];
-
     while (isBefore(currentTime, endTime)) {
       const timeStr = format(currentTime, 'HH:mm');
-      const isBooked = mockExistingBookings.some(booking => 
-        isSameDay(parseISO(booking.date), date) && booking.time === timeStr
-      );
+      const isBooked = bookedTimes.includes(timeStr);
 
       if (!isBooked) {
         slots.push(timeStr);
@@ -75,7 +108,7 @@ const BookingCalendar = ({
       setAvailableTimes([]);
       onTimeSelect(''); // Reset time if date is deselected
     }
-  }, [selectedDate, professionalId, professionalAvailability]);
+  }, [selectedDate, professionalId, professionalAvailability, bookedTimes]);
 
   const handleTimeSelect = (time) => {
     onTimeSelect(time);

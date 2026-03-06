@@ -1,0 +1,25 @@
+{
+  "name": "joby-video-faststart-server",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node src/index.js",
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.879.0",
+    "@aws-sdk/lib-storage": "^3.879.0",
+    "@supabase/supabase-js": "^2.49.9",
+    "cors": "^2.8.5",
+    "dotenv": "^16.6.1",
+    "express": "^4.21.2",
+    "multer": "^1.4.5-lts.1",
+    "pino": "^10.3.1",
+    "pino-http": "^11.0.0",
+    "work-video-app": "file:.."
+  },
+  "devDependencies": {
+    "pino-pretty": "^13.1.3"
+  }
+}

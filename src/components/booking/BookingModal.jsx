@@ -13,6 +13,15 @@ import { Briefcase, CalendarDays, Clock, MapPin as MapPinIcon, DollarSign, Credi
 import BookingCalendar from './BookingCalendar';
 import { useAuth } from '@/contexts/AuthContext';
 import { cn } from '@/lib/utils';
+import { format } from 'date-fns';
+import { supabase } from '@/lib/supabaseClient';
+import { normalizePriceUnit } from '@/lib/priceUnit';
+import { log } from '@/lib/logger';
+
+const isMissingColumnError = (error) => {
+  const msg = String(error?.message || error || '').toLowerCase();
+  return msg.includes('column') && msg.includes('does not exist');
+};
 
 const formatCurrency = (value) => {
   return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
@@ -25,6 +34,9 @@ const BookingModal = ({ isOpen, setIsOpen, professional }) => {
   const [step, setStep] = useState(1);
   const [serviceType, setServiceType] = useState('hourly'); 
   const [serviceLocation, setServiceLocation] = useState('');
+  const [availableServices, setAvailableServices] = useState([]);
+  const [servicesLoading, setServicesLoading] = useState(false);
+  const [selectedServiceId, setSelectedServiceId] = useState('');
   const [selectedDate, setSelectedDate] = useState(null);
   const [selectedTime, setSelectedTime] = useState('');
   const [estimatedHours, setEstimatedHours] = useState(1);
@@ -43,17 +55,43 @@ const BookingModal = ({ isOpen, setIsOpen, professional }) => {
   const autoAcceptBookings = professional?.availability?.autoAcceptBookings || false;
   const approvalTimeoutHours = 24; // Professional has 24h to respond
 
+  const selectedService = availableServices.find((s) => String(s.id) === String(selectedServiceId)) || null;
+
+  const getDerivedServiceType = () => {
+    if (!selectedService) return serviceType;
+    const unit = normalizePriceUnit(selectedService.price_unit);
+    if (unit === 'hora') return 'hourly';
+    if (unit === 'dia') return 'daily';
+    return 'event';
+  };
+
   const calculateTotal = () => {
     let basePrice = 0;
-    if (serviceType === 'hourly') {
-      basePrice = professionalHourlyRate * estimatedHours;
-    } else if (serviceType === 'daily') {
-      basePrice = professionalDailyRate * estimatedDays;
-    } else if (serviceType === 'event') {
-      basePrice = parseFloat(eventBudget) || 0;
-    } else if (serviceType === 'emergency') {
-      basePrice = parseFloat(emergencyBudget) || 0;
+
+    if (selectedService) {
+      const unit = normalizePriceUnit(selectedService.price_unit);
+      const price = Number(selectedService.price) || 0;
+
+      if (unit === 'hora') {
+        basePrice = price * Math.max(1, Number(estimatedHours) || 1);
+      } else if (unit === 'dia') {
+        basePrice = price * Math.max(1, Number(estimatedDays) || 1);
+      } else {
+        basePrice = price;
+      }
+    } else {
+      // Fallback (caso o profissional não tenha serviços carregados)
+      if (serviceType === 'hourly') {
+        basePrice = professionalHourlyRate * estimatedHours;
+      } else if (serviceType === 'daily') {
+        basePrice = professionalDailyRate * estimatedDays;
+      } else if (serviceType === 'event') {
+        basePrice = parseFloat(eventBudget) || 0;
+      } else if (serviceType === 'emergency') {
+        basePrice = parseFloat(emergencyBudget) || 0;
+      }
     }
+
     const fee = basePrice * platformFeeRate;
     return { basePrice, fee, total: basePrice + fee };
   };
@@ -67,6 +105,8 @@ const BookingModal = ({ isOpen, setIsOpen, professional }) => {
       setStep(1);
       setServiceType('hourly');
       setServiceLocation(clientUser?.location || ''); 
+      setAvailableServices([]);
+      setSelectedServiceId('');
       setSelectedDate(null);
       setSelectedTime('');
       setEstimatedHours(1);
@@ -86,6 +126,56 @@ const BookingModal = ({ isOpen, setIsOpen, professional }) => {
       if (timer) clearTimeout(timer);
     };
   }, [isOpen, professional, clientUser]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadServices = async () => {
+      if (!isOpen || !professional?.id) return;
+
+      setServicesLoading(true);
+      try {
+        const { data, error } = await supabase
+          .from('services')
+          .select('id, title, price, price_unit, is_active')
+          .eq('user_id', professional.id)
+          .eq('is_active', true)
+          .order('created_at', { ascending: false });
+
+        if (error) throw error;
+        if (cancelled) return;
+
+        const list = data || [];
+        setAvailableServices(list);
+        if (list.length > 0) {
+          setSelectedServiceId(String(list[0].id));
+          const unit = normalizePriceUnit(list[0].price_unit);
+          setServiceType(unit === 'hora' ? 'hourly' : unit === 'dia' ? 'daily' : 'event');
+        }
+      } catch (e) {
+        if (cancelled) return;
+        setAvailableServices([]);
+        toast({
+          title: 'Não foi possível carregar serviços',
+          description: String(e?.message || 'Tente novamente.'),
+          variant: 'destructive',
+        });
+      } finally {
+        if (!cancelled) setServicesLoading(false);
+      }
+    };
+
+    loadServices();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, professional?.id, toast]);
+
+  useEffect(() => {
+    if (!selectedService) return;
+    const derived = getDerivedServiceType();
+    setServiceType(derived);
+  }, [selectedServiceId]);
 
   // Temporary slot reservation timeout
   useEffect(() => {
@@ -124,28 +214,20 @@ const BookingModal = ({ isOpen, setIsOpen, professional }) => {
   };
 
   const handleNextStep = () => {
-    if (step === 1 && (!serviceType || !serviceLocation)) {
-      toast({ title: "Campos obrigatórios", description: "Por favor, selecione o tipo de serviço e informe o local.", variant: "destructive" });
+    if (step === 1 && (!serviceLocation || !selectedServiceId)) {
+      toast({ title: "Campos obrigatórios", description: "Por favor, selecione o serviço e informe o local.", variant: "destructive" });
       return;
     }
     if (step === 2 && (!selectedDate || !selectedTime)) {
       toast({ title: "Data e Hora", description: "Por favor, selecione uma data e horário válidos.", variant: "destructive" });
       return;
     }
-    if (step === 2 && serviceType === 'hourly' && estimatedHours < 1) {
+    if (step === 2 && getDerivedServiceType() === 'hourly' && estimatedHours < 1) {
       toast({ title: "Horas Estimadas", description: "Por favor, informe um número válido de horas.", variant: "destructive" });
       return;
     }
-    if (step === 2 && serviceType === 'daily' && estimatedDays < 1) {
+    if (step === 2 && getDerivedServiceType() === 'daily' && estimatedDays < 1) {
       toast({ title: "Dias Estimados", description: "Por favor, informe um número válido de dias.", variant: "destructive" });
-      return;
-    }
-    if (step === 2 && serviceType === 'event' && (!eventBudget || parseFloat(eventBudget) <= 0)) {
-      toast({ title: "Orçamento do Evento", description: "Por favor, informe um orçamento válido para o evento.", variant: "destructive" });
-      return;
-    }
-    if (step === 2 && serviceType === 'emergency' && (!emergencyBudget || parseFloat(emergencyBudget) <= 0)) {
-      toast({ title: "Valor Emergência", description: "Por favor, informe um valor válido para a emergência.", variant: "destructive" });
       return;
     }
     setStep(prev => prev + 1);
@@ -165,47 +247,104 @@ const BookingModal = ({ isOpen, setIsOpen, professional }) => {
       return;
     }
 
-    // Criar solicitação de trabalho
-    const workRequest = {
-      id: `req_${Date.now()}`,
-      professionalId: professional.id,
-      clientId: clientUser.id,
-      clientName: clientUser.name,
-      professionalName: professional.name,
-      service: professional.profession,
-      serviceType,
-      serviceLocation,
-      date: selectedDate,
-      time: selectedTime,
-      estimatedHours: serviceType === 'hourly' ? estimatedHours : null,
-      estimatedDays: serviceType === 'daily' ? estimatedDays : null,
-      eventBudget: serviceType === 'event' ? parseFloat(eventBudget) : null,
-      jobDescription,
-      paymentMethod,
-      totalAmount: total,
-      status: autoAcceptBookings ? 'approved' : 'pending',
-      createdAt: new Date(),
-      expiresAt: new Date(Date.now() + approvalTimeoutHours * 60 * 60 * 1000),
+    if (!clientUser?.id) {
+      toast({ title: 'Login necessário', description: 'Você precisa estar logado para contratar.', variant: 'destructive' });
+      return;
+    }
+
+    if (!professional?.id) {
+      toast({ title: 'Profissional inválido', description: 'Não foi possível identificar o profissional.', variant: 'destructive' });
+      return;
+    }
+
+    if (!selectedServiceId) {
+      toast({ title: 'Selecione um serviço', description: 'Este profissional precisa ter ao menos 1 serviço ativo.', variant: 'destructive' });
+      return;
+    }
+
+    if (!selectedDate || !selectedTime) {
+      toast({ title: 'Data e Hora', description: 'Selecione uma data e um horário.', variant: 'destructive' });
+      return;
+    }
+
+    const submit = async () => {
+      try {
+        const dateISO = selectedDate ? format(selectedDate, 'yyyy-MM-dd') : null;
+        const nextStatus = autoAcceptBookings ? 'accepted' : 'pending';
+
+        const notesParts = [];
+        if (jobDescription?.trim()) notesParts.push(jobDescription.trim());
+        if (paymentMethod) notesParts.push(`Pagamento: ${paymentMethod}`);
+        const notes = notesParts.length ? notesParts.join('\n') : null;
+
+        const payload = {
+          professional_id: professional.id,
+          client_id: clientUser.id,
+          service_id: selectedServiceId,
+          status: nextStatus,
+          scheduled_date: dateISO,
+          scheduled_time: selectedTime,
+          duration: dateISO ? 1 : null,
+          notes,
+          location: serviceLocation || null,
+        };
+
+        const attempts = [
+          { ...payload, total_price: total },
+          payload,
+          { ...payload, total_price: total, location: undefined },
+        ];
+
+        let inserted = null;
+        let lastError = null;
+
+        for (const row of attempts) {
+          const clean = { ...row };
+          // Evitar mandar undefined pro PostgREST
+          Object.keys(clean).forEach((k) => clean[k] === undefined && delete clean[k]);
+
+          const res = await supabase.from('bookings').insert([clean]).select('id').single();
+          if (!res.error) {
+            inserted = res.data;
+            lastError = null;
+            break;
+          }
+          lastError = res.error;
+          if (!isMissingColumnError(res.error)) break;
+        }
+
+        if (lastError) throw lastError;
+
+        if (autoAcceptBookings) {
+          setBookingStatus('approved');
+          toast({
+            title: 'Solicitação aprovada!',
+            description: 'Serviço confirmado. Você pode acompanhar em Meus Serviços.',
+            variant: 'success',
+            duration: 7000,
+          });
+        } else {
+          setBookingStatus('pending_approval');
+          toast({
+            title: 'Solicitação enviada!',
+            description: 'Aguardando resposta do profissional. Você pode acompanhar em Meus Serviços.',
+            duration: 7000,
+          });
+        }
+
+        // fecha o modal após enviar
+        setIsOpen(false);
+      } catch (e) {
+        log.error('BOOKING', 'Erro ao criar booking:', e);
+        toast({
+          title: 'Erro ao enviar solicitação',
+          description: String(e?.message || 'Não foi possível enviar agora.'),
+          variant: 'destructive',
+        });
+      }
     };
 
-    console.log("Work request submitted:", workRequest);
-
-    if (autoAcceptBookings) {
-      setBookingStatus('approved');
-      toast({
-        title: "Solicitação Aprovada Automaticamente!",
-        description: `Seu serviço com ${professional.name} foi confirmado! O chat está disponível e o cronômetro pode ser ativado.`,
-        variant: "success",
-        duration: 7000,
-      });
-    } else {
-      setBookingStatus('pending_approval');
-      toast({
-        title: "Solicitação de Trabalho Enviada!",
-        description: `${professional.name} tem ${approvalTimeoutHours}h para aprovar. Você será notificado da resposta.`,
-        duration: 7000,
-      });
-    }
+    submit();
   };
   
   const handleCloseModal = () => {
@@ -238,36 +377,67 @@ const BookingModal = ({ isOpen, setIsOpen, professional }) => {
               {step === 1 && (
                 <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} className="space-y-4">
                   <div>
+                    <Label htmlFor="serviceId">Serviço</Label>
+                    <Select value={selectedServiceId} onValueChange={setSelectedServiceId}>
+                      <SelectTrigger id="serviceId" disabled={servicesLoading}>
+                        <SelectValue placeholder={servicesLoading ? 'Carregando…' : 'Selecione o serviço'} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {availableServices.map((s) => (
+                          <SelectItem key={s.id} value={String(s.id)}>
+                            <div className="flex flex-col">
+                              <span>{s.title}</span>
+                              <span className="text-xs text-muted-foreground">
+                                {formatCurrency(Number(s.price) || 0)} / {normalizePriceUnit(s.price_unit)}
+                              </span>
+                            </div>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {!servicesLoading && availableServices.length === 0 && (
+                      <p className="text-xs text-destructive mt-1">
+                        Este profissional não tem serviços ativos no momento.
+                      </p>
+                    )}
+                  </div>
+                  <div>
                     <Label htmlFor="serviceType">Tipo de Cobrança</Label>
                     <Select value={serviceType} onValueChange={setServiceType}>
-                      <SelectTrigger id="serviceType">
+                      <SelectTrigger id="serviceType" disabled={!!selectedService}>
                         <SelectValue placeholder="Selecione o tipo" />
                       </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="hourly">
-                        <div className="flex flex-col">
-                          <span>Por Hora</span>
-                          <span className="text-xs text-muted-foreground">R$ {professionalHourlyRate}/hora</span>
-                        </div>
-                      </SelectItem>
-                      <SelectItem value="daily">
-                        <div className="flex flex-col">
-                          <span>Por Diária</span>
-                          <span className="text-xs text-muted-foreground">R$ {professionalDailyRate}/dia</span>
-                        </div>
-                      </SelectItem>
-                      <SelectItem value="event">
-                        <div className="flex flex-col">
-                          <span>Por Evento/Projeto</span>
-                          <span className="text-xs text-muted-foreground">Valor negociado</span>
-                        </div>
-                      </SelectItem>
-                      <SelectItem value="emergency">
-                        <div className="flex flex-col">
-                          <span>Por Emergência</span>
-                          <span className="text-xs text-muted-foreground">R$ {emergencyBudget} fixo</span>
-                        </div>
-                      </SelectItem>
+                      {getDerivedServiceType() === 'hourly' && (
+                        <SelectItem value="hourly">
+                          <div className="flex flex-col">
+                            <span>Por Hora</span>
+                            <span className="text-xs text-muted-foreground">
+                              {selectedService ? `${formatCurrency(Number(selectedService.price) || 0)}/hora` : `R$ ${professionalHourlyRate}/hora`}
+                            </span>
+                          </div>
+                        </SelectItem>
+                      )}
+                      {getDerivedServiceType() === 'daily' && (
+                        <SelectItem value="daily">
+                          <div className="flex flex-col">
+                            <span>Por Diária</span>
+                            <span className="text-xs text-muted-foreground">
+                              {selectedService ? `${formatCurrency(Number(selectedService.price) || 0)}/dia` : `R$ ${professionalDailyRate}/dia`}
+                            </span>
+                          </div>
+                        </SelectItem>
+                      )}
+                      {getDerivedServiceType() === 'event' && (
+                        <SelectItem value="event">
+                          <div className="flex flex-col">
+                            <span>Preço fixo</span>
+                            <span className="text-xs text-muted-foreground">
+                              {selectedService ? formatCurrency(Number(selectedService.price) || 0) : 'Valor negociado'}
+                            </span>
+                          </div>
+                        </SelectItem>
+                      )}
                     </SelectContent>
                     </Select>
                   </div>
@@ -317,7 +487,7 @@ const BookingModal = ({ isOpen, setIsOpen, professional }) => {
                          </p>
                     </div>
                     <div className="mt-0 md:mt-[26px]"> {/* Align with calendar title */}
-                      {serviceType === 'hourly' && (
+                      {getDerivedServiceType() === 'hourly' && (
                         <div>
                           <Label htmlFor="estimatedHours">Horas Estimadas</Label>
                           <Input 
@@ -332,7 +502,7 @@ const BookingModal = ({ isOpen, setIsOpen, professional }) => {
                         </div>
                       )}
                       
-                      {serviceType === 'daily' && (
+                      {getDerivedServiceType() === 'daily' && (
                         <div>
                           <Label htmlFor="estimatedDays">Dias Estimados</Label>
                           <Input 
@@ -346,35 +516,13 @@ const BookingModal = ({ isOpen, setIsOpen, professional }) => {
                           <p className="text-xs text-muted-foreground mt-1">Quantos dias de trabalho.</p>
                         </div>
                       )}
-                      
-                      {serviceType === 'event' && (
-                        <div>
-                          <Label htmlFor="eventBudget">Orçamento do Evento (R$)</Label>
-                          <Input 
-                            id="eventBudget" 
-                            type="number" 
-                            value={eventBudget} 
-                            onChange={(e) => setEventBudget(e.target.value)} 
-                            min="0"
-                            step="0.01"
-                            placeholder="Ex: 500.00"
-                          />
-                          <p className="text-xs text-muted-foreground mt-1">Valor total do projeto/evento.</p>
-                        </div>
-                      )}
-                      {serviceType === 'emergency' && (
-                        <div>
-                          <Label htmlFor="emergencyBudget">Valor Emergência (R$)</Label>
-                          <Input 
-                            id="emergencyBudget" 
-                            type="number" 
-                            value={emergencyBudget} 
-                            onChange={(e) => setEmergencyBudget(e.target.value)} 
-                            min="0"
-                            step="0.01"
-                            placeholder="Ex: 300.00"
-                          />
-                          <p className="text-xs text-muted-foreground mt-1">Valor fixo para contratação por emergência.</p>
+
+                      {getDerivedServiceType() === 'event' && selectedService && (
+                        <div className="p-3 bg-muted/30 rounded-md text-sm">
+                          <p className="text-muted-foreground">
+                            <Info size={14} className="inline mr-1 mb-0.5" />
+                            Este serviço tem preço fixo.
+                          </p>
                         </div>
                       )}
                     </div>
@@ -388,12 +536,12 @@ const BookingModal = ({ isOpen, setIsOpen, professional }) => {
                   <Card className="bg-muted/30">
                     <CardContent className="p-4 space-y-2 text-sm">
                       <p><strong>Profissional:</strong> {professional.name} ({professional.profession})</p>
-                      <p><strong>Tipo de Cobrança:</strong> {serviceType === 'hourly' ? 'Por Hora' : serviceType === 'daily' ? 'Diária' : 'Evento/Projeto'}</p>
+                      <p><strong>Serviço:</strong> {selectedService?.title || 'Serviço'}</p>
+                      <p><strong>Tipo de Cobrança:</strong> {getDerivedServiceType() === 'hourly' ? 'Por Hora' : getDerivedServiceType() === 'daily' ? 'Diária' : 'Preço fixo'}</p>
                       <p><strong>Local:</strong> {serviceLocation}</p>
                       <p><strong>Data:</strong> {selectedDate ? new Date(selectedDate).toLocaleDateString('pt-BR') : 'N/A'} às {selectedTime}</p>
-                      {serviceType === 'hourly' && <p><strong>Duração Estimada:</strong> {estimatedHours} hora(s)</p>}
-                      {serviceType === 'daily' && <p><strong>Dias Estimados:</strong> {estimatedDays} dia(s)</p>}
-                      {serviceType === 'event' && <p><strong>Orçamento:</strong> {formatCurrency(parseFloat(eventBudget) || 0)}</p>}
+                      {getDerivedServiceType() === 'hourly' && <p><strong>Duração Estimada:</strong> {estimatedHours} hora(s)</p>}
+                      {getDerivedServiceType() === 'daily' && <p><strong>Dias Estimados:</strong> {estimatedDays} dia(s)</p>}
                       {jobDescription && <p><strong>Descrição:</strong> {jobDescription}</p>}
                     </CardContent>
                   </Card>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react'
 import { NavLink, Link, useLocation } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
@@ -22,6 +22,7 @@ import { useResolvedStorageUrl } from '@/lib/storageUrl'
 import { useUnreadNotificationsCount } from '@/hooks/useUnreadNotificationsCount'
 import { useUnreadMessagesCount } from '@/hooks/useUnreadMessagesCount'
 import { usePendingWorkRequestsCount } from '@/hooks/usePendingWorkRequestsCount'
+import { useMobileHeader } from '@/contexts/MobileHeaderContext'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -30,12 +31,79 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { preloadMainTabs, preloadRoute } from '@/routes/routePreload'
 
 const Navigation = () => {
   const location = useLocation()
   const { user, logout } = useAuth()
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [keyboardVisible, setKeyboardVisible] = useState(false)
+  const [overlayOpen, setOverlayOpen] = useState(false)
+  const { showMobileHeader } = useMobileHeader()
+  const mobileHeaderRef = useRef(null)
+  const [uiReady, setUiReady] = useState(false)
+
+  useEffect(() => {
+    let raf1 = 0
+    let raf2 = 0
+    raf1 = window.requestAnimationFrame(() => {
+      raf2 = window.requestAnimationFrame(() => setUiReady(true))
+    })
+    return () => {
+      if (raf1) window.cancelAnimationFrame(raf1)
+      if (raf2) window.cancelAnimationFrame(raf2)
+    }
+  }, [])
+
+  // Regra: não mexer no Início (/).
+  // Em outras páginas, o header do topo é renderizado no fluxo pelo MainLayout
+  // (para sumir naturalmente ao rolar) e aqui não deve ficar fixo.
+  const isHomeRoute = location.pathname === '/'
+  const isMessagesRoute = location.pathname === '/messages'
+  const shouldRenderFixedMobileHeader = isHomeRoute || isMessagesRoute
+
+  // Expose the fixed mobile header height as a CSS var so other fixed UI
+  // (e.g. Feed tabs) can anchor below it without hard-coded values.
+  useLayoutEffect(() => {
+    if (typeof window === 'undefined') return
+
+    const root = document.documentElement
+
+    if (!shouldRenderFixedMobileHeader) {
+      root.style.setProperty('--joby-mobile-header-height', '0px')
+      return
+    }
+
+    // Default early to match Feed/tabs fallback, then measure accurately.
+    root.style.setProperty('--joby-mobile-header-height', '48px')
+
+    const el = mobileHeaderRef.current
+    if (!el) return
+
+    const readHeight = () => {
+      const rect = el.getBoundingClientRect()
+      const height = rect?.height || el.offsetHeight || 0
+      root.style.setProperty('--joby-mobile-header-height', `${Math.round(height)}px`)
+    }
+
+    readHeight()
+
+    let ro
+    if ('ResizeObserver' in window) {
+      ro = new ResizeObserver(() => readHeight())
+      try {
+        ro.observe(el)
+      } catch {
+        // ignore
+      }
+    }
+
+    window.addEventListener('resize', readHeight, { passive: true })
+    return () => {
+      window.removeEventListener('resize', readHeight)
+      if (ro) ro.disconnect()
+    }
+  }, [shouldRenderFixedMobileHeader])
 
   const avatarSrc = useResolvedStorageUrl(user?.avatar)
   const unreadNotifications = useUnreadNotificationsCount(user?.id)
@@ -51,7 +119,7 @@ const Navigation = () => {
   const renderBadge = (value) => {
     if (!value || value <= 0) return null
     return (
-      <span className="absolute -top-2 -right-2 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center leading-none shadow-md ring-2 ring-background pointer-events-none">
+      <span className="absolute top-0 right-0 translate-x-[65%] -translate-y-[65%] min-w-[18px] h-[18px] px-1 rounded-full bg-primary text-white text-[10px] font-bold flex items-center justify-center leading-none shadow-md ring-2 ring-background pointer-events-none">
         {getBadgeLabel(value)}
       </span>
     )
@@ -81,8 +149,44 @@ const Navigation = () => {
     }
   }, [])
 
-  // Esconder navegação inferior apenas quando o teclado está aberto e está na página de mensagens
-  const hideBottomNav = keyboardVisible && location.pathname === '/messages'
+  // Android/WebView: when a full-screen overlay is open (e.g. comments sheet/modal)
+  // we must hide the fixed bottom nav to avoid it flashing above the dim backdrop.
+  // Relying only on z-index/CSS is not enough on some devices.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    const hasOverlay = () =>
+      document.documentElement.classList.contains('joby-overlay-open') ||
+      document.body.classList.contains('joby-overlay-open')
+
+    const update = () => {
+      const next = hasOverlay()
+      setOverlayOpen(next)
+      if (next) setMobileMenuOpen(false)
+    }
+
+    update()
+
+    const observer = new MutationObserver(update)
+
+    try {
+      observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
+    } catch {
+      // ignore
+    }
+    try {
+      observer.observe(document.body, { attributes: true, attributeFilter: ['class'] })
+    } catch {
+      // ignore
+    }
+
+    return () => observer.disconnect()
+  }, [])
+
+  // Esconder navegação inferior quando:
+  // - teclado está aberto na página de mensagens
+  // - existe overlay full-screen aberto (ex.: comentários)
+  const hideBottomNav = (keyboardVisible && location.pathname === '/messages') || overlayOpen
 
   const navItems = [
     { path: '/', icon: <Home size={20} />, label: 'Início' },
@@ -108,6 +212,29 @@ const Navigation = () => {
   const toggleMobileMenu = () => {
     setMobileMenuOpen(!mobileMenuOpen)
   }
+
+  const preloadPath = useCallback((path) => {
+    const p = String(path || '')
+    const promise = preloadRoute(p)
+    if (promise && typeof promise.catch === 'function') promise.catch(() => {})
+  }, [])
+
+  // Warm up the main tabs in the background so the first navigation feels instant.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    const schedule =
+      window.requestIdleCallback ||
+      ((cb) => setTimeout(() => cb({ timeRemaining: () => 0 }), 900))
+
+    const cancel = window.cancelIdleCallback || clearTimeout
+
+    const id = schedule(() => {
+      preloadMainTabs().catch(() => {})
+    })
+
+    return () => cancel(id)
+  }, [])
 
   const isNavItemActive = (itemPath) => {
     if (itemPath.includes(':jobId')) {
@@ -142,6 +269,8 @@ const Navigation = () => {
                       ? item.path.replace(':jobId', 'sample-job-123')
                       : item.path
                   }
+                  onMouseEnter={() => preloadPath(item.path)}
+                  onPointerDown={() => preloadPath(item.path)}
                   className={() =>
                     `flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors relative text-sm ${
                       isNavItemActive(item.path)
@@ -229,7 +358,7 @@ const Navigation = () => {
 
       {/* Mobile Navigation Bottom Bar */}
       {!hideBottomNav && (
-        <div className="md:hidden fixed bottom-0 left-0 right-0 bg-background border-t border-border z-50">
+        <div className="joby-bottom-nav safeBottomNav md:hidden fixed bottom-0 left-0 right-0 bg-background border-t border-border z-50">
           <nav className="flex justify-around items-center h-16">
             {navItems.slice(0, 4).map(
               (
@@ -242,6 +371,7 @@ const Navigation = () => {
                       ? item.path.replace(':jobId', 'sample-job-123')
                       : item.path
                   }
+                  onPointerDown={() => preloadPath(item.path)}
                   className={() =>
                     `flex flex-col items-center justify-center p-1 w-1/4 h-full ${
                       isNavItemActive(item.path)
@@ -275,48 +405,59 @@ const Navigation = () => {
         </div>
       )}
 
-      {/* Mobile Header */}
-      <div
-        className="mobile-header-joby md:hidden fixed top-0 left-0 right-0 h-11 bg-background border-b border-border z-40 flex items-center justify-between px-3 transition-all duration-300 shadow-sm"
-        style={{ willChange: 'transform, opacity', transform: 'translateZ(0)' }}
-      >
-        <Link to="/" className="flex items-center gap-1.5">
-          <div className="w-8 h-8 rounded-full joby-gradient flex items-center justify-center">
-            <Briefcase size={14} className="text-primary-foreground" />
-          </div>
-          <h1 className="text-base font-bold text-foreground">JOBY</h1>
-        </Link>
-
-        <div className="flex items-center gap-2">
-          <Link
-            to="/notifications"
-            className="relative h-8 w-8 rounded-full flex items-center justify-center text-muted-foreground hover:text-foreground"
-            aria-label="Notificações"
-          >
-            <Bell size={18} />
-            {renderBadge(alertCount)}
+      {/* Mobile Header (fixed apenas no Início e em Mensagens) */}
+      {shouldRenderFixedMobileHeader && (
+        <div
+          ref={mobileHeaderRef}
+          className={`mobile-header-joby safeHeader md:hidden fixed top-0 left-0 right-0 bg-background border-b border-border z-[70] flex items-center justify-between px-4 pb-2 transform-gpu ${
+            uiReady ? 'transition-[transform,opacity] duration-150 ease-out' : ''
+          } ${
+            showMobileHeader
+              ? 'translate-y-0 opacity-100 pointer-events-auto'
+              : '-translate-y-full opacity-0 pointer-events-none'
+          }`}
+          style={{ willChange: 'transform, opacity' }}
+        >
+          <Link to="/" className="flex items-center gap-1.5">
+            <div className="w-8 h-8 rounded-full joby-gradient flex items-center justify-center">
+              <Briefcase size={16} className="text-primary-foreground" />
+            </div>
+            <h1 className="text-base font-bold text-foreground">JOBY</h1>
           </Link>
 
-          <Link
-            to={`/profile/${user?.id || '1'}`}
-            className="h-8 w-8 cursor-pointer rounded-full overflow-hidden bg-primary flex items-center justify-center"
-            aria-label="Meu perfil"
-          >
-            {avatarSrc ? (
-              <img
-                src={avatarSrc}
-                alt={user?.name}
-                className="h-full w-full object-cover"
-                loading="eager"
-              />
-            ) : (
-              <span className="text-xs font-bold text-primary-foreground">
-                {user?.name?.charAt(0)?.toUpperCase() || 'U'}
+          <div className="flex items-center gap-2">
+            <Link
+              to="/notifications"
+              className="relative h-9 w-9 rounded-full flex items-center justify-center text-muted-foreground hover:text-foreground"
+              aria-label="Notificações"
+            >
+              <span className="relative inline-flex translate-y-[1px]">
+                <Bell size={18} />
+                {renderBadge(alertCount)}
               </span>
-            )}
-          </Link>
+            </Link>
+
+            <Link
+              to={`/profile/${user?.id || '1'}`}
+              className="h-9 w-9 cursor-pointer rounded-full overflow-hidden bg-primary flex items-center justify-center"
+              aria-label="Meu perfil"
+            >
+              {avatarSrc ? (
+                <img
+                  src={avatarSrc}
+                  alt={user?.name}
+                  className="h-full w-full object-cover"
+                  loading="eager"
+                />
+              ) : (
+                <span className="text-xs font-bold text-primary-foreground">
+                  {user?.name?.charAt(0)?.toUpperCase() || 'U'}
+                </span>
+              )}
+            </Link>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Mobile Menu Overlay (Drawer style) */}
       <AnimatePresence>
@@ -327,7 +468,7 @@ const Navigation = () => {
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2, ease: 'easeOut' }}
             onClick={toggleMobileMenu}
-            className="fixed inset-0 bg-black/60 z-[59] md:hidden"
+            className="fixed inset-0 bg-black/80 backdrop-blur-[2px] z-[9990] md:hidden"
             style={{ willChange: 'opacity', backfaceVisibility: 'hidden' }}
           />
         )}
@@ -342,7 +483,7 @@ const Navigation = () => {
               duration: 0.25,
               ease: [0.4, 0, 0.2, 1],
             }}
-            className="fixed bottom-0 left-0 right-0 bg-card z-[60] md:hidden rounded-t-2xl shadow-2xl p-4 pb-6 border-t border-border"
+            className="fixed bottom-0 left-0 right-0 bg-card z-[9991] md:hidden rounded-t-2xl shadow-2xl p-4 pb-6 border-t border-border"
             style={{
               maxHeight: '70vh',
               display: 'flex',
@@ -433,7 +574,7 @@ const Navigation = () => {
                 {/* Cronômetro */}
                 <li>
                   <NavLink
-                    to="/work-timer/sample-job-123"
+                    to="/work-timer/current"
                     className={() =>
                       `flex items-center gap-3.5 px-3 py-3 rounded-lg transition-colors text-sm ${
                         isNavItemActive('/work-timer/:jobId')
