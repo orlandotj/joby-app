@@ -8,13 +8,16 @@ import { Tabs } from '@/components/ui/tabs'
 import { SwipeTabsList } from '@/components/SwipeTabs'
 import { useSwipeTabs } from '@/hooks/useSwipeTabs'
 import { TabTransition } from '@/components/TabTransition'
+import JobyPageHeader from '@/components/JobyPageHeader'
+import { tabsPillList, tabsPillTrigger } from '@/design/tabTokens'
 import { useAuth } from '@/contexts/AuthContext'
-import { supabase } from '@/lib/supabaseClient'
+import { supabase, safeGetSession } from '@/lib/supabaseClient'
 import { formatPriceUnit } from '@/lib/priceUnit'
 import { cn } from '@/lib/utils'
 import { resolveStorageUrl, useResolvedStorageUrl } from '@/lib/storageUrl'
 import { log } from '@/lib/logger'
 import { useToast } from '@/components/ui/use-toast'
+import { useOverlayLock } from '@/hooks/useOverlayLock'
 import ServiceDetailsModal from '@/components/ServiceDetailsModal'
 import { markNotificationsReadByType } from '@/services/notificationService'
 import ErrorState from '@/components/ui/ErrorState'
@@ -30,6 +33,16 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import {
   Briefcase,
   Calendar,
@@ -69,6 +82,8 @@ const WorkRequests = () => {
 
   const realtimeEnabled =
     String(import.meta?.env?.VITE_ENABLE_SUPABASE_REALTIME).toLowerCase().trim() === 'true'
+  const [resetTick, setResetTick] = useState(0)
+  const realtimeResetKey = realtimeEnabled ? resetTick : 0
   const [activeTab, setActiveTab] = useState('recebidos')
   const [activeStatus, setActiveStatus] = useState('all')
   const [requestsRecebidos, setRequestsRecebidos] = useState([])
@@ -76,6 +91,7 @@ const WorkRequests = () => {
   const [requestMediaByRequestId, setRequestMediaByRequestId] = useState({})
   const [signedUrlByMediaId, setSignedUrlByMediaId] = useState({})
   const [signedUrlFailedByMediaId, setSignedUrlFailedByMediaId] = useState({})
+  const [mediaSignedUrlsRerunTick, setMediaSignedUrlsRerunTick] = useState(0)
   const [activeMediaViewer, setActiveMediaViewer] = useState(null)
   const [editModalOpen, setEditModalOpen] = useState(false)
   const [editBooking, setEditBooking] = useState(null)
@@ -91,6 +107,8 @@ const WorkRequests = () => {
   const [updatingId, setUpdatingId] = useState(null)
   const [deletingId, setDeletingId] = useState(null)
   const [openMenuRequestId, setOpenMenuRequestId] = useState(null)
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+  const [deleteConfirmTarget, setDeleteConfirmTarget] = useState(null)
   const [cacheUpdatedAt, setCacheUpdatedAt] = useState(null)
   const [expandedDetailsById, setExpandedDetailsById] = useState({})
   const [openInlineDetailsRequestId, setOpenInlineDetailsRequestId] = useState(null)
@@ -111,6 +129,14 @@ const WorkRequests = () => {
     if (import.meta.env.DEV) log.debug('REQUESTS', 'mount', { ...requestsTrace(null) })
     return () => {
       if (import.meta.env.DEV) log.debug('REQUESTS', 'unmount', { ...requestsTrace(null) })
+    }
+  }, [])
+
+  useEffect(() => {
+    const handler = () => setResetTick((v) => v + 1)
+    window.addEventListener('supabase:reset', handler)
+    return () => {
+      window.removeEventListener('supabase:reset', handler)
     }
   }, [])
 
@@ -155,6 +181,10 @@ const WorkRequests = () => {
   const signedUrlFailedByMediaIdRef = useRef({})
   const attachmentsSignedUrlUnavailableRef = useRef(false)
   const attachmentsSignedUrlWarnedRef = useRef(false)
+  const mediaSignedUrlsInFlightRef = useRef(false)
+  const mediaSignedUrlsPendingRerunRef = useRef(false)
+  const mediaSignedUrlsLastRequestedKeyRef = useRef('')
+  const mediaSignedUrlsProcessingKeyRef = useRef('')
   const viewerVideoRef = useRef(null)
 
   useEffect(() => {
@@ -1524,6 +1554,7 @@ const WorkRequests = () => {
   useEffect(() => {
     if (!user?.id) return
 
+    const client = supabase
     const enableRealtime =
       String(import.meta?.env?.VITE_ENABLE_SUPABASE_REALTIME).toLowerCase().trim() === 'true'
 
@@ -1547,7 +1578,7 @@ const WorkRequests = () => {
     if (enableRealtime) {
       const userId = String(user.id)
 
-      channelProfessional = supabase
+      channelProfessional = client
         .channel(`work-requests:bookings:professional:${userId}`)
         .on(
           'postgres_changes',
@@ -1561,7 +1592,7 @@ const WorkRequests = () => {
         )
         .subscribe()
 
-      channelClient = supabase
+      channelClient = client
         .channel(`work-requests:bookings:client:${userId}`)
         .on(
           'postgres_changes',
@@ -1597,14 +1628,28 @@ const WorkRequests = () => {
 
     return () => {
       try {
-        if (channelProfessional) supabase.removeChannel(channelProfessional)
-        if (channelClient) supabase.removeChannel(channelClient)
+        if (channelProfessional) {
+          try {
+            channelProfessional.unsubscribe?.()
+          } catch {
+            // ignore
+          }
+          client.removeChannel(channelProfessional)
+        }
+        if (channelClient) {
+          try {
+            channelClient.unsubscribe?.()
+          } catch {
+            // ignore
+          }
+          client.removeChannel(channelClient)
+        }
         if (intervalId) window.clearInterval(intervalId)
       } catch {
         // ignore
       }
     }
-  }, [user?.id])
+  }, [user?.id, realtimeResetKey])
 
   const getStatusLabel = (status) => {
     const labels = {
@@ -2010,6 +2055,8 @@ const WorkRequests = () => {
     return null
   }, [routeRequestId, requestsRecebidos, requestsEnviados])
 
+  useOverlayLock(isDetailsRoute || !!activeMediaViewer?.mediaId)
+
   useEffect(() => {
     if (!isDetailsRoute) return
     if (!detailsRequest?.tab) return
@@ -2242,10 +2289,22 @@ const WorkRequests = () => {
     const requestIds = filteredRequestsForMedia.map((r) => r?.id).filter(Boolean)
     if (requestIds.length === 0) return
 
+    const requestedKey = `${activeTab}|${activeStatus}|${requestIds.join('|')}`
+    mediaSignedUrlsLastRequestedKeyRef.current = requestedKey
+
+    if (mediaSignedUrlsInFlightRef.current) {
+      mediaSignedUrlsPendingRerunRef.current = true
+      return
+    }
+
     let cancelled = false
 
     const run = async () => {
       try {
+        mediaSignedUrlsInFlightRef.current = true
+        mediaSignedUrlsProcessingKeyRef.current = requestedKey
+        mediaSignedUrlsPendingRerunRef.current = false
+
         let data = null
         let error = null
 
@@ -2311,17 +2370,38 @@ const WorkRequests = () => {
 
         setRequestMediaByRequestId((prev) => ({ ...prev, ...grouped }))
 
-        const {
-          data: { session },
-        } = await supabase.auth.getSession()
-        const accessToken = session?.access_token
-        if (!accessToken) return
-
-        const missing = rows
+        // GATING: só busca access_token (safeGetSession) se realmente existir mídia sem signed-url.
+        const missingNeedSigning = rows
           .map((r) => String(r?.id || '').trim())
           .filter(Boolean)
           .filter((id) => !signedUrlByMediaIdRef.current?.[id])
           .filter((id) => !signedUrlFailedByMediaIdRef.current?.[id])
+          .filter((id) => !readSignedUrlCache(id))
+
+        if (!missingNeedSigning.length) return
+
+        // Se o endpoint já foi detectado como indisponível, falha tudo que ainda falta (sem chamar auth).
+        if (attachmentsSignedUrlUnavailableRef.current && missingNeedSigning.length) {
+          setSignedUrlFailedByMediaId((prev) => {
+            const next = { ...(prev || {}) }
+            for (const id of missingNeedSigning) next[id] = true
+            return next
+          })
+          return
+        }
+
+        let session = null
+        try {
+          const { data } = await safeGetSession(8000)
+          session = data?.session || null
+        } catch {
+          return
+        }
+
+        const accessToken = session?.access_token || null
+        if (!accessToken) return
+
+        const missing = Array.from(new Set(missingNeedSigning))
 
         // Prioriza a solicitação aberta nos detalhes, para as 3 thumbs aparecerem rápido.
         const priorityRequestId = String(routeRequestId || '').trim()
@@ -2329,20 +2409,10 @@ const WorkRequests = () => {
           ? grouped[priorityRequestId].map((m) => String(m?.id || '').trim()).filter(Boolean)
           : []
 
-        const missingUnique = Array.from(new Set(missing))
         const missingPrioritized = [
-          ...priorityIds.filter((id) => missingUnique.includes(id)),
-          ...missingUnique.filter((id) => !priorityIds.includes(id)),
+          ...priorityIds.filter((id) => missing.includes(id)),
+          ...missing.filter((id) => !priorityIds.includes(id)),
         ]
-
-        if (attachmentsSignedUrlUnavailableRef.current && missing.length) {
-          setSignedUrlFailedByMediaId((prev) => {
-            const next = { ...(prev || {}) }
-            for (const id of missing) next[id] = true
-            return next
-          })
-          return
-        }
 
         const candidatesBatch = buildAttachmentsApiUrlCandidates('/api/service-attachments/signed-urls')
         const fetchSignedUrlsBatch = async (mediaIds) => {
@@ -2513,6 +2583,22 @@ const WorkRequests = () => {
           serviceMediaTablesReadyRef.current = false
           return
         }
+      } finally {
+        // Finalização confiável: nunca deixa inFlight preso.
+        mediaSignedUrlsInFlightRef.current = false
+
+        if (cancelled) {
+          mediaSignedUrlsPendingRerunRef.current = false
+          return
+        }
+
+        const lastKey = String(mediaSignedUrlsLastRequestedKeyRef.current || '')
+        const processingKey = String(mediaSignedUrlsProcessingKeyRef.current || '')
+        const shouldRerun =
+          Boolean(mediaSignedUrlsPendingRerunRef.current) && Boolean(lastKey) && lastKey !== processingKey
+
+        mediaSignedUrlsPendingRerunRef.current = false
+        if (shouldRerun) setMediaSignedUrlsRerunTick((v) => v + 1)
       }
     }
 
@@ -2525,6 +2611,7 @@ const WorkRequests = () => {
     user?.id,
     activeTab,
     activeStatus,
+    mediaSignedUrlsRerunTick,
     filteredRequestsForMedia.map((r) => r?.id).filter(Boolean).join('|'),
   ])
 
@@ -2787,35 +2874,30 @@ const WorkRequests = () => {
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.5 }}
-      className="container mx-auto py-6 px-4 max-w-5xl touch-pan-y"
+      className="w-full touch-pan-y"
       {...swipeTabs.containerProps}
     >
-      {/* Header */}
-      <div className="mb-5">
-        <div className="flex items-center gap-3">
-          <Briefcase size={24} className="text-primary" />
-          <h1 className="text-2xl font-bold text-foreground">Solicitações</h1>
-        </div>
-      </div>
-
-      {/* Abas Recebidos e Enviados */}
-      <div className="mb-6">
-        <Tabs value={activeTab} onValueChange={handleTabChange}>
+      <JobyPageHeader
+        icon={<FileText size={23} className="text-primary-foreground" />}
+        title="Solicitações"
+        subtitle="Acompanhe solicitações de serviços no JOBY"
+      >
+        <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
           <SwipeTabsList
             tabs={[
               { value: 'recebidos', label: 'Recebidos' },
               { value: 'enviados', label: 'Enviados' },
             ]}
-            listClassName="w-full max-w-md"
-            triggerClassName="flex-1"
+            listClassName={tabsPillList}
+            triggerClassName={tabsPillTrigger}
             onTabClick={() => setActiveStatus('all')}
           />
         </Tabs>
-      </div>
+      </JobyPageHeader>
 
       <TabTransition value={activeTab} order={TAB_ORDER}>
         <>
-          {/* Filtros de Status (padro Joby) */}
+          {/* Filtros de Status (padrão Joby) */}
           <div className="mb-6">
             <div className="grid grid-cols-2 gap-2">
               {statusCardsWithCounts.map((status) => {
@@ -3135,12 +3217,8 @@ const WorkRequests = () => {
                                 type="button"
                                 onClick={() => {
                                   setOpenMenuRequestId(null)
-                                  // Mantém compat com lógica antiga (recusadas) mas permite apagar em outros status.
-                                  if (request.status === 'rejected') {
-                                    deleteRejectedBooking(request.id)
-                                  } else {
-                                    deleteBooking({ bookingId: request.id, expectedStatus: request.status })
-                                  }
+                                  setDeleteConfirmTarget({ id: request.id, status: request.status })
+                                  setDeleteConfirmOpen(true)
                                 }}
                                 disabled={deletingId === request.id}
                                 className={cn(
@@ -5469,6 +5547,49 @@ const WorkRequests = () => {
           </div>
         </div>
       ) : null}
+
+      <AlertDialog
+        open={deleteConfirmOpen}
+        onOpenChange={(open) => {
+          setDeleteConfirmOpen(open)
+          if (!open) setDeleteConfirmTarget(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Apagar solicitação?</AlertDialogTitle>
+            <AlertDialogDescription>
+              <div>
+                Isso remove a solicitação e apaga a conversa associada. Essa ação não pode ser desfeita.
+              </div>
+              <div className="mt-3 flex items-start gap-2 text-destructive">
+                <AlertTriangle className="h-4 w-4 mt-0.5" />
+                <span>Atenção: todas as mensagens desse chat serão apagadas.</span>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={Boolean(deletingId || updatingId)}>
+              Voltar
+            </AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={Boolean(!deleteConfirmTarget?.id || deletingId || updatingId)}
+              onClick={() => {
+                const target = deleteConfirmTarget
+                if (!target?.id) return
+                if (target.status === 'rejected') {
+                  deleteRejectedBooking(target.id)
+                } else {
+                  deleteBooking({ bookingId: target.id, expectedStatus: target.status })
+                }
+              }}
+            >
+              Apagar
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <ServiceDetailsModal
         isOpen={editModalOpen}

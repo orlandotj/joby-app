@@ -360,8 +360,8 @@ const BookingModal = ({ isOpen, setIsOpen, professional }) => {
           "sm:max-w-lg md:max-w-xl lg:max-w-2xl max-h-[90vh] flex flex-col",
           bookingStatus === 'pending_confirmation' && "lg:max-w-md" // Smaller for status screens
       )}>
-        <DialogHeader>
-          <DialogTitle className="text-2xl flex items-center gap-2">
+        <DialogHeader className="-mx-6 px-6 pb-4 border-b border-border/60">
+          <DialogTitle className="text-xl sm:text-2xl font-semibold tracking-tight flex items-center gap-2">
             <Briefcase /> Contratar {professional.name}
           </DialogTitle>
           { bookingStatus === 'idle' && (
@@ -371,7 +371,7 @@ const BookingModal = ({ isOpen, setIsOpen, professional }) => {
           )}
         </DialogHeader>
 
-        <div className="flex-grow overflow-y-auto p-1 pr-3 space-y-6">
+        <div className="flex-grow overflow-y-auto pt-4 pr-3 space-y-6">
           {bookingStatus === 'idle' && (
             <>
               {step === 1 && (
@@ -618,7 +618,7 @@ const BookingModal = ({ isOpen, setIsOpen, professional }) => {
           )}
         </div>
 
-        <DialogFooter className="pt-4 border-t mt-auto">
+        <DialogFooter className="-mx-6 px-6 pt-4 border-t border-border/60 mt-auto">
             {bookingStatus === 'idle' && step > 1 && <Button variant="outline" onClick={handlePrevStep}>Voltar</Button>}
             {bookingStatus === 'idle' && step < 3 && <Button onClick={handleNextStep} className="joby-gradient text-primary-foreground">Próximo</Button>}
             {bookingStatus === 'idle' && step === 3 && (

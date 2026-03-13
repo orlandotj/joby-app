@@ -32,6 +32,16 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Button } from '@/components/ui/button'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { useAuth } from '@/contexts/AuthContext'
 import { useLikes } from '@/contexts/LikesContext'
 import AddContentFab from '@/components/AddContentFab'
@@ -346,6 +356,8 @@ const Profile = () => {
   const [photos, setPhotos] = useState([]) // Added state for photos
   const [reviews, setReviews] = useState([])
   const [services, setServices] = useState([])
+  const [deleteServiceConfirmOpen, setDeleteServiceConfirmOpen] = useState(false)
+  const [deleteServiceConfirmId, setDeleteServiceConfirmId] = useState(null)
   const [profileLoading, setProfileLoading] = useState(true)
   const [contentLoading, setContentLoading] = useState(true)
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
@@ -389,7 +401,7 @@ const Profile = () => {
 
   // Prevent duplicate in-flight loads (React 18 StrictMode runs effects twice in DEV)
   const loadSeqRef = useRef(0)
-  const loadInFlightRef = useRef({ profileId: null, seq: 0, inFlight: false })
+  const loadInFlightRef = useRef({ profileId: null, seq: 0, inFlight: false, startedAt: 0 })
   const countersSeqRef = useRef(0)
   const lastGridLogRef = useRef('')
 
@@ -480,7 +492,7 @@ const Profile = () => {
     loadUserProfile()
   }, [profileId])
 
-  const refreshFollowCounters = async (targetProfileId = profileId) => {
+  const refreshFollowCounters = React.useCallback(async (targetProfileId = profileId) => {
     if (!targetProfileId || !isUuid(targetProfileId)) return
 
     const seq = (countersSeqRef.current += 1)
@@ -537,7 +549,17 @@ const Profile = () => {
         setIsFollowing(false)
       }
     }
-  }
+  }, [currentUser?.id, profileId])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const onAuthReady = () => {
+      if (!profileId || !isUuid(profileId)) return
+      refreshFollowCounters(profileId)
+    }
+    window.addEventListener('auth:ready', onAuthReady)
+    return () => window.removeEventListener('auth:ready', onAuthReady)
+  }, [profileId, refreshFollowCounters])
 
   const updateSearchParams = (mutate, { replace = false } = {}) => {
     const params = new URLSearchParams(location.search)
@@ -643,18 +665,25 @@ const Profile = () => {
     }
 
     // Skip duplicate calls for the same profileId while an earlier request is in-flight.
-    if (
-      loadInFlightRef.current.inFlight &&
-      loadInFlightRef.current.profileId === profileId
-    ) {
-      if (imageDebugOn()) {
-        log.debug('PROFILE', 'Skip duplicate in-flight load', profileId)
+    if (loadInFlightRef.current.inFlight && loadInFlightRef.current.profileId === profileId) {
+      const startedAt = Number(loadInFlightRef.current.startedAt || 0)
+      const ageMs = startedAt ? Date.now() - startedAt : 0
+
+      // Escape hatch: allow retry if an older request got "stuck" (resume/hiccup).
+      if (startedAt && ageMs > 10_000) {
+        log.warn('PROFILE', 'Stale in-flight load; allowing retry', { profileId, ageMs })
+        loadInFlightRef.current.inFlight = false
+        loadInFlightRef.current.startedAt = 0
+      } else {
+        if (imageDebugOn()) {
+          log.debug('PROFILE', 'Skip duplicate in-flight load', profileId)
+        }
+        return
       }
-      return
     }
 
     const seq = (loadSeqRef.current += 1)
-    loadInFlightRef.current = { profileId, seq, inFlight: true }
+    loadInFlightRef.current = { profileId, seq, inFlight: true, startedAt: Date.now() }
     const isStale = () => loadSeqRef.current !== seq
 
     const t0 = performance.now()
@@ -937,9 +966,32 @@ const Profile = () => {
       if (!isStale()) setContentLoading(false)
       if (loadInFlightRef.current.seq === seq) {
         loadInFlightRef.current.inFlight = false
+        loadInFlightRef.current.startedAt = 0
       }
     }
   }
+
+  // Retry on resume (keep-alive / app switching / bfcache).
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (!profileId) return
+
+    const trigger = () => void loadUserProfile()
+    const onFocus = () => trigger()
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') trigger()
+    }
+    const onPageShow = () => trigger()
+
+    window.addEventListener('focus', onFocus)
+    document.addEventListener('visibilitychange', onVisibility)
+    window.addEventListener('pageshow', onPageShow)
+    return () => {
+      window.removeEventListener('focus', onFocus)
+      document.removeEventListener('visibilitychange', onVisibility)
+      window.removeEventListener('pageshow', onPageShow)
+    }
+  }, [profileId, loadUserProfile])
 
   const handleOpenUploadDialog = (type) => {
     setUploadType(type)
@@ -1087,9 +1139,6 @@ const Profile = () => {
     }
     if (!serviceId) return
 
-    const ok = window.confirm('Tem certeza que deseja excluir este serviço?')
-    if (!ok) return
-
     try {
       const { error } = await supabase
         .from('services')
@@ -1113,6 +1162,12 @@ const Profile = () => {
         variant: 'destructive',
       })
     }
+  }
+
+  const openDeleteServiceConfirm = (serviceId) => {
+    if (!serviceId) return
+    setDeleteServiceConfirmId(serviceId)
+    setDeleteServiceConfirmOpen(true)
   }
 
   const handleEditContent = async (content) => {
@@ -1469,7 +1524,7 @@ const Profile = () => {
                                     className="text-red-600"
                                     onClick={(e) => {
                                       e.stopPropagation()
-                                      handleDeleteService(service.id)
+                                      openDeleteServiceConfirm(service.id)
                                     }}
                                   >
                                     <Trash2 size={14} className="mr-2" />
@@ -1727,6 +1782,38 @@ const Profile = () => {
       {isOwnProfile && !isContentModalOpen && !isMobileMenuOpen && (
         <AddContentFab onOpenUploadDialog={handleOpenUploadDialog} />
       )}
+
+      <AlertDialog
+        open={deleteServiceConfirmOpen}
+        onOpenChange={(open) => {
+          setDeleteServiceConfirmOpen(open)
+          if (!open) setDeleteServiceConfirmId(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Excluir serviço?</AlertDialogTitle>
+            <AlertDialogDescription>
+              O serviço será removido do seu perfil. Você pode adicioná-lo novamente depois.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Voltar</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => {
+                const serviceId = deleteServiceConfirmId
+                if (!serviceId) return
+                setDeleteServiceConfirmOpen(false)
+                setDeleteServiceConfirmId(null)
+                handleDeleteService(serviceId)
+              }}
+            >
+              Excluir
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   )
 }

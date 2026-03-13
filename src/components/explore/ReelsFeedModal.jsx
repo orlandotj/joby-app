@@ -26,6 +26,8 @@ import { CommentsSheet } from '@/components/comments/CommentsSheet'
 import { prefetchComments } from '@/hooks/useComments'
 import { hasSessionViewedVideo, incrementVideoView, markSessionViewedVideo } from '@/services/viewService'
 import { searchVideos } from '@/services/exploreSearchService'
+import { useOverlayLock } from '@/hooks/useOverlayLock'
+import { Z_FULLSCREEN_CONTENT, Z_FULLSCREEN_OVERLAY, Z_FULLSCREEN_UI } from '@/design/overlayZIndexTokens'
 
 const uniqueById = (items) => {
   const seen = new Set()
@@ -862,7 +864,7 @@ const ReelSlide = ({
         <button
           onPointerDown={() => {
             if (!video?.id) return
-            void prefetchComments({ contentId: video.id, contentType: 'video', sort: 'new' })
+            void prefetchComments({ contentId: video.id, contentType: 'video', sort: 'new', userId: currentUser?.id || null })
           }}
           onClick={(e) => {
             e.stopPropagation()
@@ -932,7 +934,9 @@ export const ReelsFeedModal = ({
   searchTerm = '',
   pageSize = 10,
 }) => {
+  useOverlayLock(!!open, { navMode: 'dim' })
   const { toast } = useToast()
+  const { user: currentUser } = useAuth()
   const likes = useLikes()
   const commentsMeta = useCommentsMeta()
 
@@ -1077,8 +1081,8 @@ export const ReelsFeedModal = ({
     if (!open) return
     const v = items?.[activeIndex]
     if (!v?.id) return
-    void prefetchComments({ contentId: v.id, contentType: 'video', sort: 'new' })
-  }, [activeIndex, items, open])
+    void prefetchComments({ contentId: v.id, contentType: 'video', sort: 'new', userId: currentUser?.id || null })
+  }, [activeIndex, currentUser?.id, items, open])
 
   // Hydrate likes for loaded items (batch, 1x per page of results)
   useEffect(() => {
@@ -1187,7 +1191,7 @@ export const ReelsFeedModal = ({
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="fixed inset-0 z-[9999] bg-black"
+                className={`fixed inset-0 ${Z_FULLSCREEN_OVERLAY} bg-black`}
               />
             </DialogPrimitive.Overlay>
 
@@ -1197,7 +1201,7 @@ export const ReelsFeedModal = ({
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 transition={{ duration: 0.15 }}
-                className="fixed inset-0 z-[10000] h-[100dvh] w-full overflow-hidden bg-black"
+                className={`fixed inset-0 ${Z_FULLSCREEN_CONTENT} h-[100dvh] w-full overflow-hidden bg-black`}
               >
                 <DialogPrimitive.Title className="sr-only">Reels</DialogPrimitive.Title>
                 <DialogPrimitive.Description className="sr-only">
@@ -1205,7 +1209,7 @@ export const ReelsFeedModal = ({
                 </DialogPrimitive.Description>
 
                 {/* Exit (fixed) */}
-                <div className="absolute left-3 top-3 z-[10001]">
+                <div className={`absolute left-3 top-3 ${Z_FULLSCREEN_UI}`}>
                   <Button
                     type="button"
                     variant="ghost"

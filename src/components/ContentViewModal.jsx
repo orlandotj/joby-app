@@ -3,6 +3,16 @@ import { motion, AnimatePresence } from 'framer-motion'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { Dialog, DialogContent, DialogHeader } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { buildR2VideoPlaybackUrl, useResolvedStorageUrl } from '@/lib/storageUrl'
 import { Textarea } from '@/components/ui/textarea'
@@ -51,6 +61,7 @@ import {
   markSessionViewedPhoto,
 } from '@/services/viewService'
 import { asInt, formatCompactNumber } from '@/lib/numberFormat'
+import { Z_FULLSCREEN_CONTENT, Z_FULLSCREEN_OVERLAY } from '@/design/overlayZIndexTokens'
 
 const ContentViewModal = ({
   isOpen,
@@ -123,6 +134,8 @@ const ContentViewModal = ({
   const viewCountedRef = useRef(false)
   const visibleEnoughRef = useRef(true)
   const [seekOverlay, setSeekOverlay] = useState(null)
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+  const [deleteConfirmPayload, setDeleteConfirmPayload] = useState(null)
 
   const isVideo = content?.type === 'video' || content?.video_type
   const contentLikeType = isVideo ? 'video' : 'photo'
@@ -221,8 +234,8 @@ const ContentViewModal = ({
   useEffect(() => {
     if (!isOpen) return
     if (!content?.id) return
-    void prefetchComments({ contentId: content.id, contentType: contentCommentsType, sort: 'new' })
-  }, [content?.id, contentCommentsType, isOpen])
+    void prefetchComments({ contentId: content.id, contentType: contentCommentsType, sort: 'new', userId: currentUser?.id || null })
+  }, [content?.id, contentCommentsType, currentUser?.id, isOpen])
 
   // Pausar vídeo ao fechar
   useEffect(() => {
@@ -822,11 +835,11 @@ const ContentViewModal = ({
   const contentType = isVideo ? 'video' : 'photo'
 
   return (
-    <Dialog open={isOpen} onOpenChange={onClose}>
+    <Dialog open={isOpen} onOpenChange={onClose} navMode="dim">
       <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className="fixed inset-0 z-[9999] bg-black/45 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
+        <DialogPrimitive.Overlay className={`fixed inset-0 ${Z_FULLSCREEN_OVERLAY} bg-black/45 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0`} />
         <DialogPrimitive.Content
-          className="fixed inset-0 z-[9999] p-0 outline-none"
+          className={`fixed inset-0 ${Z_FULLSCREEN_CONTENT} p-0 outline-none`}
         >
           <DialogPrimitive.Title className="sr-only">
             {isVideo
@@ -941,14 +954,8 @@ const ContentViewModal = ({
                               <DropdownMenuItem
                                 className="text-red-600"
                                 onClick={() => {
-                                  if (confirm('Tem certeza que deseja excluir este conteúdo?')) {
-                                    if (onDelete) return onDelete({ ...content, type: 'video' })
-                                    toast({
-                                      title: 'Excluir conteúdo',
-                                      description: 'Ação de exclusão não configurada.',
-                                      variant: 'destructive',
-                                    })
-                                  }
+                                  setDeleteConfirmPayload({ ...content, type: 'video' })
+                                  setDeleteConfirmOpen(true)
                                 }}
                               >
                                 <Trash2 size={16} className="mr-2" />
@@ -1214,7 +1221,7 @@ const ContentViewModal = ({
                             size="icon"
                             onPointerDown={() => {
                               if (!content?.id) return
-                              void prefetchComments({ contentId: content.id, contentType: contentCommentsType, sort: 'new' })
+                              void prefetchComments({ contentId: content.id, contentType: contentCommentsType, sort: 'new', userId: currentUser?.id || null })
                             }}
                             onClick={openComments}
                             className="h-9 w-9 rounded-full bg-transparent hover:bg-foreground/10 active:bg-foreground/15 focus-visible:ring-0 focus-visible:ring-offset-0"
@@ -1353,14 +1360,8 @@ const ContentViewModal = ({
                               <DropdownMenuItem
                                 className="text-red-600"
                                 onClick={() => {
-                                  if (confirm('Tem certeza que deseja excluir este conteúdo?')) {
-                                    if (onDelete) return onDelete({ ...content, type: 'photo' })
-                                    toast({
-                                      title: 'Excluir conteúdo',
-                                      description: 'Ação de exclusão não configurada.',
-                                      variant: 'destructive',
-                                    })
-                                  }
+                                  setDeleteConfirmPayload({ ...content, type: 'photo' })
+                                  setDeleteConfirmOpen(true)
                                 }}
                               >
                                 <Trash2 size={16} className="mr-2" />
@@ -1512,6 +1513,43 @@ const ContentViewModal = ({
               }
             }}
           />
+
+          <AlertDialog
+            open={deleteConfirmOpen}
+            onOpenChange={(open) => {
+              setDeleteConfirmOpen(open)
+              if (!open) setDeleteConfirmPayload(null)
+            }}
+          >
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Excluir conteúdo?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  Essa ação não pode ser desfeita.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Voltar</AlertDialogCancel>
+                <AlertDialogAction
+                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  onClick={() => {
+                    const payload = deleteConfirmPayload
+                    setDeleteConfirmOpen(false)
+                    setDeleteConfirmPayload(null)
+                    if (!payload) return
+                    if (onDelete) return onDelete(payload)
+                    toast({
+                      title: 'Excluir conteúdo',
+                      description: 'Ação de exclusão não configurada.',
+                      variant: 'destructive',
+                    })
+                  }}
+                >
+                  Excluir
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>
     </Dialog>

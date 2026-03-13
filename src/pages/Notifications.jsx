@@ -32,6 +32,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { useAuth } from '@/contexts/AuthContext'
 import {
   listNotifications,
@@ -49,6 +59,8 @@ import { log } from '@/lib/logger'
 import { useSwipeTabs } from '@/hooks/useSwipeTabs'
 import { SwipeTabsList } from '@/components/SwipeTabs'
 import { TabTransition } from '@/components/TabTransition'
+import JobyPageHeader from '@/components/JobyPageHeader'
+import { tabsPillList, tabsPillTrigger } from '@/design/tabTokens'
 
 const TYPE_META = {
   system: { label: 'Sistema', icon: Settings, badge: 'secondary' },
@@ -188,6 +200,8 @@ const Notifications = () => {
 
   const [actionTarget, setActionTarget] = useState(null)
   const [actionOpen, setActionOpen] = useState(false)
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
+  const [deleteConfirmTarget, setDeleteConfirmTarget] = useState(null)
   const [confirmingId, setConfirmingId] = useState(null)
 
   const mountedRef = useRef(false)
@@ -710,7 +724,7 @@ const Notifications = () => {
             </div>
 
             <div className="flex-1 min-w-0 overflow-hidden">
-              <div className="flex flex-wrap items-start gap-x-2 gap-y-1">
+              <div className="flex items-start gap-2">
                 <div className="flex-1 min-w-0">
                   <p className="font-semibold text-foreground leading-snug break-words line-clamp-2">
                     {aggregateTitle || n.title || meta.label}
@@ -722,18 +736,19 @@ const Notifications = () => {
                   ) : null}
                 </div>
 
-                <div className="flex items-center gap-2 flex-shrink-0 w-full sm:w-auto sm:justify-end">
-                  {!n.is_read && (
-                    <span className="h-2 w-2 rounded-full bg-primary" aria-label="Não lida" />
-                  )}
-                  <Badge variant={meta.badge} className="whitespace-nowrap">
-                    {meta.label}
-                  </Badge>
+                <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                  <div className="text-xs text-muted-foreground whitespace-nowrap">
+                    {n.created_at ? formatWhen(n.created_at) : ''}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {!n.is_read && (
+                      <span className="h-2 w-2 rounded-full bg-primary" aria-label="Não lida" />
+                    )}
+                    <Badge variant={meta.badge} className="whitespace-nowrap">
+                      {meta.label}
+                    </Badge>
+                  </div>
                 </div>
-              </div>
-
-              <div className="mt-2 text-xs text-muted-foreground">
-                {n.created_at ? formatWhen(n.created_at) : ''}
               </div>
 
               {isWorkTimerStart(n) && !n?.data?.confirmed_at ? (
@@ -822,16 +837,11 @@ const Notifications = () => {
 
   return (
     <div className="pb-20 md:pb-4 touch-pan-y" {...swipeTabs.containerProps}>
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold text-foreground">Notificações</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Central de alertas do seu perfil profissional.
-          </p>
-        </div>
-      </div>
-
-      <div className="mt-5">
+      <JobyPageHeader
+        icon={<Bell size={23} className="text-primary-foreground" />}
+        title="Central de Atividades"
+        subtitle="Acompanhe tudo que acontece no seu perfil"
+      >
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
           <SwipeTabsList
             tabs={[
@@ -839,13 +849,13 @@ const Notifications = () => {
               { value: 'unread', label: 'Não lidas' },
               { value: 'archived', label: 'Arquivadas' },
             ]}
-            listClassName="flex w-full overflow-x-auto gap-2 justify-start p-1"
-            triggerClassName="text-xs sm:text-sm whitespace-nowrap"
+            listClassName={tabsPillList}
+            triggerClassName={tabsPillTrigger}
           />
         </Tabs>
-      </div>
+      </JobyPageHeader>
 
-      <div className="mt-5">
+      <div className="mt-2">
         <TabTransition value={activeTab} order={TAB_ORDER}>
           {loading
             ? renderSkeleton()
@@ -909,7 +919,9 @@ const Notifications = () => {
               onClick={() => {
                 const n = actionTarget
                 closeActions()
-                if (n) handleDelete(n)
+                if (!n) return
+                setDeleteConfirmTarget(n)
+                setDeleteConfirmOpen(true)
               }}
             >
               <Trash2 className="mr-2" size={16} />
@@ -924,6 +936,38 @@ const Notifications = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog
+        open={deleteConfirmOpen}
+        onOpenChange={(open) => {
+          setDeleteConfirmOpen(open)
+          if (!open) setDeleteConfirmTarget(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Apagar notificação?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Isso remove a notificação da sua lista. Essa ação não pode ser desfeita.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Voltar</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => {
+                const n = deleteConfirmTarget
+                if (!n) return
+                setDeleteConfirmOpen(false)
+                setDeleteConfirmTarget(null)
+                handleDelete(n)
+              }}
+            >
+              Apagar
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
     </div>
   )

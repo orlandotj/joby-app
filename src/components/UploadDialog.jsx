@@ -20,7 +20,7 @@ import {
 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { motion, AnimatePresence } from 'framer-motion'
-import { safeGetUser, supabase } from '@/lib/supabaseClient'
+import { safeGetSession, safeGetUser, supabase } from '@/lib/supabaseClient'
 import { formatFileSize } from '@/lib/mediaCompression'
 import { optimizeImageFile } from '@/lib/imageOptimize'
 import { uploadVideoFaststart } from '@/services/cloudflareService'
@@ -740,6 +740,17 @@ const UploadDialog = ({ isOpen, setIsOpen, uploadType, onUploadComplete }) => {
         // ignore
       }
 
+      let accessToken = null
+      try {
+        const { data: sessionData } = await safeGetSession(8000)
+        accessToken = sessionData?.session?.access_token || null
+      } catch {
+        accessToken = null
+      }
+      if (!accessToken) {
+        throw new Error('Sessão expirada. Faça login novamente.')
+      }
+
       const result = await uploadVideoFaststart({
         videoFile: file,
         userId: user.id,
@@ -747,6 +758,7 @@ const UploadDialog = ({ isOpen, setIsOpen, uploadType, onUploadComplete }) => {
         description: description.trim() || '',
         uploadType,
         videoType: uploadType === 'short-video' ? 'short' : 'long',
+        accessToken,
         onProgress: (percent) => {
           const mappedProgress = 30 + percent * 0.6 // 30% -> 90%
           setUploadProgress(Math.round(mappedProgress))
@@ -925,9 +937,9 @@ const UploadDialog = ({ isOpen, setIsOpen, uploadType, onUploadComplete }) => {
   return (
     <Dialog open={isOpen} onOpenChange={handleClose}>
       <DialogContent className="sm:max-w-[525px]">
-        <DialogHeader>
-          <DialogTitle>{dialogTitle}</DialogTitle>
-          <DialogDescription>
+        <DialogHeader className="-mx-6 px-6 pb-4 border-b border-border/60">
+          <DialogTitle className="text-xl font-semibold tracking-tight">{dialogTitle}</DialogTitle>
+          <DialogDescription className="leading-snug">
             Compartilhe seu trabalho com a comunidade. Preencha os detalhes abaixo.
           </DialogDescription>
         </DialogHeader>
@@ -977,7 +989,7 @@ const UploadDialog = ({ isOpen, setIsOpen, uploadType, onUploadComplete }) => {
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
             >
-              <div className="grid gap-4 py-4">
+              <div className="grid gap-4 pt-4">
                 {!preview && (
                   <div
                     className="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-dashed border-muted-foreground/50 rounded-md cursor-pointer hover:border-primary transition-colors"
@@ -1111,7 +1123,7 @@ const UploadDialog = ({ isOpen, setIsOpen, uploadType, onUploadComplete }) => {
                 </div>
               </div>
 
-              <DialogFooter>
+              <DialogFooter className="-mx-6 px-6 pt-4 border-t border-border/60">
                 <Button variant="outline" onClick={handleClose}>
                   Cancelar
                 </Button>

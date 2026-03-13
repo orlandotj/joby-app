@@ -1,7 +1,8 @@
-import React, { useEffect, useMemo, useRef } from 'react'
+import React, { useEffect, useMemo } from 'react'
 import ReactDOM from 'react-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import { ArrowLeft, X } from 'lucide-react'
+import { useOverlayLock } from '@/hooks/useOverlayLock'
 
 const DEFAULT_TITLE = 'Cronômetro'
 
@@ -15,39 +16,8 @@ const WorkDetailsModal = ({
   showHeader = true,
 }) => {
   const mounted = typeof document !== 'undefined'
-  const restoreRef = useRef(null)
 
-  useEffect(() => {
-    if (!open) return
-    if (!mounted) return
-
-    const scrollY = window.scrollY || document.documentElement.scrollTop || 0
-    const body = document.body
-
-    restoreRef.current = {
-      scrollY,
-      position: body.style.position,
-      top: body.style.top,
-      width: body.style.width,
-      overflow: body.style.overflow,
-    }
-
-    body.style.position = 'fixed'
-    body.style.top = `-${scrollY}px`
-    body.style.width = '100%'
-    body.style.overflow = 'hidden'
-
-    return () => {
-      const prev = restoreRef.current
-      if (!prev) return
-      body.style.position = prev.position
-      body.style.top = prev.top
-      body.style.width = prev.width
-      body.style.overflow = prev.overflow
-      window.scrollTo(0, prev.scrollY)
-      restoreRef.current = null
-    }
-  }, [open, mounted])
+  useOverlayLock(!!open)
 
   useEffect(() => {
     if (!open) return

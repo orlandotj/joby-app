@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'react'
+import { useLocation } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import VideoCard from '@/components/VideoCard'
 import { Tabs } from '@/components/ui/tabs'
@@ -73,7 +74,7 @@ const FeedVideoLoadingSkeleton = ({ count = 2 } = {}) => {
 
 const Feed = () => {
   const [videos, setVideos] = useState([])
-  const [loading, setLoading] = useState(true)
+  const [initialLoading, setInitialLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
   const [hasMore, setHasMore] = useState(true)
@@ -83,6 +84,7 @@ const Feed = () => {
   const [error, setError] = useState(null)
   const [activeTab, setActiveTab] = useState('for-you')
   const [reloadNonce, setReloadNonce] = useState(0)
+  const location = useLocation()
   const { showMobileHeader, setShowMobileHeader } = useMobileHeader()
   const { user } = useAuth() // Get current user
   const likes = useLikes()
@@ -96,9 +98,57 @@ const Feed = () => {
   const lastScrollY = useRef(0)
   const ticking = useRef(false)
   const observerTarget = useRef(null)
-  const requestSeqRef = useRef(0)
+  // Separate sequences: base load/refresh vs append/loadMore.
+  // This prevents append from invalidating a base load that must clear initialLoading.
+  const baseSeqRef = useRef(0)
+  const appendSeqRef = useRef(0)
   const tabCacheRef = useRef(new Map())
   const loadingMoreLockRef = useRef(false)
+  const lastRevalidateAtRef = useRef(0)
+
+  const mountedRef = useRef(false)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
+
+  // Track in-flight UI flags by reference counting so each operation always cleans up
+  // the flag(s) it turned on, even if it becomes stale.
+  const pendingInitialRef = useRef(0)
+  const pendingRefreshingRef = useRef(0)
+  const pendingMoreRef = useRef(0)
+
+  const beginInitialLoading = useCallback(() => {
+    pendingInitialRef.current += 1
+    if (mountedRef.current) setInitialLoading(true)
+  }, [])
+
+  const endInitialLoading = useCallback(() => {
+    pendingInitialRef.current = Math.max(0, pendingInitialRef.current - 1)
+    if (pendingInitialRef.current === 0 && mountedRef.current) setInitialLoading(false)
+  }, [])
+
+  const beginRefreshing = useCallback(() => {
+    pendingRefreshingRef.current += 1
+    if (mountedRef.current) setRefreshing(true)
+  }, [])
+
+  const endRefreshing = useCallback(() => {
+    pendingRefreshingRef.current = Math.max(0, pendingRefreshingRef.current - 1)
+    if (pendingRefreshingRef.current === 0 && mountedRef.current) setRefreshing(false)
+  }, [])
+
+  const beginLoadingMore = useCallback(() => {
+    pendingMoreRef.current += 1
+    if (mountedRef.current) setLoadingMore(true)
+  }, [])
+
+  const endLoadingMore = useCallback(() => {
+    pendingMoreRef.current = Math.max(0, pendingMoreRef.current - 1)
+    if (pendingMoreRef.current === 0 && mountedRef.current) setLoadingMore(false)
+  }, [])
 
   const [uiReady, setUiReady] = useState(false)
 
@@ -594,7 +644,22 @@ const Feed = () => {
   const fetchVideos = useCallback(
     async (tab, pageNum = 0, append = false, opts = {}) => {
       const { soft = false, silent = false, prefetch = false } = opts
-      const requestSeq = ++requestSeqRef.current
+      const isAppend = append === true
+
+      // Important sequencing rules:
+      // - append/loadMore must NOT invalidate a base load/refresh
+      // - base load/refresh SHOULD invalidate in-flight append (pagination resets)
+      const baseSeq = !isAppend ? ++baseSeqRef.current : 0
+      const appendSeq = isAppend ? ++appendSeqRef.current : 0
+      if (!isAppend) {
+        // Invalidate in-flight append ops.
+        appendSeqRef.current += 1
+      }
+
+      const isStale = () => {
+        if (isAppend) return appendSeq !== appendSeqRef.current
+        return baseSeq !== baseSeqRef.current
+      }
       const startedAt = performance.now()
 
       const INITIAL_LIMIT = 4
@@ -612,13 +677,25 @@ const Feed = () => {
         }
       }
 
-      if (append) {
+      let didBeginInitial = false
+      let didBeginRefreshing = false
+      let didBeginMore = false
+
+      if (isAppend) {
         loadingMoreLockRef.current = true
-        if (!silent) setLoadingMore(true)
+        if (!silent) {
+          didBeginMore = true
+          beginLoadingMore()
+        }
       } else {
         // Se já temos vídeos na tela, faz refresh “suave” sem piscar
-        if (soft && videos.length > 0) setRefreshing(true)
-        else setLoading(true)
+        if (soft && videos.length > 0) {
+          didBeginRefreshing = true
+          beginRefreshing()
+        } else {
+          didBeginInitial = true
+          beginInitialLoading()
+        }
 
         setPage(0)
         pageRef.current = 0
@@ -769,7 +846,7 @@ const Feed = () => {
 
           followingIds = followsData?.map((f) => f.following_id) || []
           if (followingIds.length === 0) {
-            if (requestSeq !== requestSeqRef.current) return
+            if (isStale()) return
             setVideos([])
             setHasMore(false)
             tabCacheRef.current.set(tab, {
@@ -826,7 +903,7 @@ const Feed = () => {
 
         const pageIds = pageItems.map((r) => r?.id).filter(Boolean)
 
-        if (requestSeq !== requestSeqRef.current) return
+  if (isStale()) return
 
         if (isInitialTabLoad && perfEnabled) {
           log.debug('PERF', 'feed first items received', {
@@ -837,11 +914,11 @@ const Feed = () => {
           })
         }
 
-        if (!append) {
+        if (!isAppend) {
           setHasMore(baseHasMore)
         }
 
-        if (append) {
+        if (isAppend) {
           setVideos((prev) => {
             const seen = new Set((prev || []).map((v) => String(v?.id ?? '')))
             const uniqueIncoming = pageItems.filter((v) => {
@@ -908,7 +985,7 @@ const Feed = () => {
         if (isInitialTabLoad && baseHasMore && !prefetch) {
           window.requestAnimationFrame(() => {
             scheduleIdle(() => {
-              if (requestSeq !== requestSeqRef.current) return
+              if (baseSeq !== baseSeqRef.current) return
               if (perfEnabled) {
                 log.debug('PERF', 'feed background prefetch start', { tab, t: performance.now() })
               }
@@ -917,7 +994,7 @@ const Feed = () => {
           })
         }
       } catch (err) {
-        if (requestSeq !== requestSeqRef.current) return
+        if (isStale()) return
         setError('Falha ao carregar vídeos. Tente novamente.')
         log.error('FEED', 'fetchVideos error', err)
       } finally {
@@ -928,23 +1005,33 @@ const Feed = () => {
           await new Promise((r) => setTimeout(r, remaining))
         }
 
-        // Sempre finalize o spinner de append, mesmo se a request ficou "stale".
-        if (append) {
-          setLoadingMore(false)
-          loadingMoreLockRef.current = false
-          return
-        }
+        // IMPORTANT: cleanup must never be blocked by staleness.
+        // Each op cleans up only the flags it turned on.
+        if (didBeginMore) endLoadingMore()
+        if (didBeginRefreshing) endRefreshing()
+        if (didBeginInitial) endInitialLoading()
 
-        // Para requests base/refresh, só finalize quando for a mais recente.
-        if (requestSeq !== requestSeqRef.current) return
-        setLoading(false)
-        setRefreshing(false)
-        setLoadingMore(false)
-        loadingMoreLockRef.current = false
+        // Always release the load-more lock when an append finishes.
+        if (isAppend) {
+          loadingMoreLockRef.current = false
+        }
       }
     },
     // Intencionalmente inclui videos.length para decidir entre loading x refresh suave
-    [commentsMeta, likes, scheduleIdle, user, videos.length, perfEnabled]
+    [
+      commentsMeta,
+      likes,
+      scheduleIdle,
+      user,
+      videos.length,
+      perfEnabled,
+      beginInitialLoading,
+      beginRefreshing,
+      beginLoadingMore,
+      endInitialLoading,
+      endRefreshing,
+      endLoadingMore,
+    ]
   )
 
   const handleTabClick = useCallback(
@@ -993,13 +1080,14 @@ const Feed = () => {
     if (!hasMore) return
     if (loadingMoreLockRef.current) return
     if (loadingMore) return
+    if (initialLoading || refreshing) return
 
     const nextPage = pageRef.current + 1
     pageRef.current = nextPage
     setPage(nextPage)
     loadingMoreLockRef.current = true
     fetchVideos(activeTab, nextPage, true)
-  }, [fetchVideos, hasMore, loadingMore, activeTab])
+  }, [fetchVideos, hasMore, initialLoading, loadingMore, refreshing, activeTab])
 
   useEffect(() => {
     const cached = tabCacheRef.current.get(activeTab)
@@ -1008,7 +1096,7 @@ const Feed = () => {
       setPage(cached.page || 0)
       offsetRef.current = typeof cached.offset === 'number' ? cached.offset : (cached.videos || []).length
       setHasMore(typeof cached.hasMore === 'boolean' ? cached.hasMore : true)
-      setLoading(false)
+      setInitialLoading(false)
       setError(null)
       // Atualiza em background sem piscar
       fetchVideos(activeTab, 0, false, { soft: true })
@@ -1018,6 +1106,54 @@ const Feed = () => {
     fetchVideos(activeTab)
   }, [activeTab, fetchVideos])
 
+  // Revalidate when returning to the browser tab / app focus.
+  // Keep it lightweight: TTL gate + soft refresh so we never show a full-page skeleton
+  // when we already have content.
+  useEffect(() => {
+    const TTL_MS = 30_000
+
+    const isActiveRoute = () => String(location?.pathname || '') === '/'
+
+    const shouldRevalidate = () => {
+      if (!isActiveRoute()) return false
+      if (initialLoading || refreshing || loadingMore) return false
+      const now = Date.now()
+      if (now - (lastRevalidateAtRef.current || 0) < TTL_MS) return false
+      lastRevalidateAtRef.current = now
+      return true
+    }
+
+    const trigger = () => {
+      if (!shouldRevalidate()) return
+      fetchVideos(activeTab, 0, false, { soft: true })
+    }
+
+    const onFocus = () => {
+      lastRevalidateAtRef.current = 0
+      trigger()
+    }
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        lastRevalidateAtRef.current = 0
+        trigger()
+      }
+    }
+
+    const onPageShow = () => {
+      lastRevalidateAtRef.current = 0
+      trigger()
+    }
+
+    window.addEventListener('focus', onFocus)
+    document.addEventListener('visibilitychange', onVisibility)
+    window.addEventListener('pageshow', onPageShow)
+    return () => {
+      window.removeEventListener('focus', onFocus)
+      document.removeEventListener('visibilitychange', onVisibility)
+      window.removeEventListener('pageshow', onPageShow)
+    }
+  }, [activeTab, fetchVideos, initialLoading, loadingMore, location?.pathname, refreshing])
+
   // Infinite scroll com IntersectionObserver
   useEffect(() => {
     const rootEl = scrollParentRef.current || findScrollParent(feedContainerRef.current)
@@ -1025,7 +1161,7 @@ const Feed = () => {
 
     const observer = new IntersectionObserver(
       (entries) => {
-        if (entries[0].isIntersecting && hasMore && !loadingMore) {
+        if (entries[0].isIntersecting && hasMore && !loadingMore && !initialLoading && !refreshing) {
           loadMore()
         }
       },
@@ -1046,7 +1182,7 @@ const Feed = () => {
         observer.unobserve(currentTarget)
       }
     }
-  }, [findScrollParent, hasMore, loadingMore, loadMore])
+  }, [findScrollParent, hasMore, initialLoading, loadingMore, loadMore, refreshing])
 
   // Fallback: alguns WebViews não disparam IntersectionObserver de forma confiável.
   useEffect(() => {
@@ -1059,7 +1195,7 @@ const Feed = () => {
       if (rafId) return
       rafId = window.requestAnimationFrame(() => {
         rafId = 0
-        if (!hasMore || loadingMore || loading) return
+        if (!hasMore || loadingMore || initialLoading || refreshing) return
 
         const { scrollTop, clientHeight, scrollHeight } = getScrollMetrics(rootEl)
         if (!scrollHeight || !clientHeight) return
@@ -1085,7 +1221,8 @@ const Feed = () => {
       window.removeEventListener('scroll', onScroll)
       if (rafId) window.cancelAnimationFrame(rafId)
     }
-  }, [findScrollParent, getScrollMetrics, hasMore, loadMore, loading, loadingMore])
+  }, [findScrollParent, getScrollMetrics, hasMore, loadMore, initialLoading, loadingMore, refreshing])
+
 
   const renderEmptyState = (tab) => {
     let icon, title, message, actionButton
@@ -1196,7 +1333,7 @@ const Feed = () => {
       <div ref={topAnchorRef} className="h-0 w-0" aria-hidden="true" />
 
       <AnimatePresence mode="wait">
-        {loading && videos.length === 0 ? (
+        {initialLoading && videos.length === 0 ? (
           <motion.div
             key="loading"
             initial={{ opacity: 0 }}

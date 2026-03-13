@@ -38,7 +38,7 @@ const Navigation = () => {
   const { user, logout } = useAuth()
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [keyboardVisible, setKeyboardVisible] = useState(false)
-  const [overlayOpen, setOverlayOpen] = useState(false)
+  const [overlayNavMode, setOverlayNavMode] = useState('none')
   const { showMobileHeader } = useMobileHeader()
   const mobileHeaderRef = useRef(null)
   const [uiReady, setUiReady] = useState(false)
@@ -149,20 +149,27 @@ const Navigation = () => {
     }
   }, [])
 
-  // Android/WebView: when a full-screen overlay is open (e.g. comments sheet/modal)
-  // we must hide the fixed bottom nav to avoid it flashing above the dim backdrop.
-  // Relying only on z-index/CSS is not enough on some devices.
+  // Android/WebView: observe overlay nav mode classes (hidden/dim)
   useEffect(() => {
     if (typeof window === 'undefined') return
 
-    const hasOverlay = () =>
-      document.documentElement.classList.contains('joby-overlay-open') ||
-      document.body.classList.contains('joby-overlay-open')
+    const HIDDEN = 'joby-overlay-nav-hidden'
+    const DIM = 'joby-overlay-nav-dim'
+
+    const readMode = () => {
+      const html = document.documentElement
+      const body = document.body
+      const hidden = html.classList.contains(HIDDEN) || body.classList.contains(HIDDEN)
+      if (hidden) return 'hidden'
+      const dim = html.classList.contains(DIM) || body.classList.contains(DIM)
+      if (dim) return 'dim'
+      return 'none'
+    }
 
     const update = () => {
-      const next = hasOverlay()
-      setOverlayOpen(next)
-      if (next) setMobileMenuOpen(false)
+      const next = readMode()
+      setOverlayNavMode(next)
+      if (next !== 'none') setMobileMenuOpen(false)
     }
 
     update()
@@ -183,10 +190,9 @@ const Navigation = () => {
     return () => observer.disconnect()
   }, [])
 
-  // Esconder navegação inferior quando:
-  // - teclado está aberto na página de mensagens
-  // - existe overlay full-screen aberto (ex.: comentários)
-  const hideBottomNav = (keyboardVisible && location.pathname === '/messages') || overlayOpen
+  // Regra nova (modais): não esconder nada atrás do overlay.
+  // Mantém apenas o caso do teclado em /messages (não é modal).
+  const hideBottomNav = keyboardVisible && location.pathname === '/messages'
 
   const navItems = [
     { path: '/', icon: <Home size={20} />, label: 'Início' },

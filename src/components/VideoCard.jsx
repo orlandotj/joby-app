@@ -1063,7 +1063,7 @@ const VideoCard = ({ video, user, onLikeChange, isFirst = false }) => {
           <button
             onPointerDown={() => {
               if (!video?.id) return
-              void prefetchComments({ contentId: video.id, contentType: 'video', sort: 'new' })
+              void prefetchComments({ contentId: video.id, contentType: 'video', sort: 'new', userId: currentUser?.id || null })
             }}
             onClick={(e) => {
               e.stopPropagation()

@@ -9,6 +9,7 @@ const INDICATOR_MAX_HEIGHT_PX = 56
 const clamp = (n, min, max) => Math.max(min, Math.min(max, n))
 
 const PullToRefresh = ({
+  enabled = false,
   onRefresh,
   isRefreshing,
   children,
@@ -99,6 +100,7 @@ const PullToRefresh = ({
   }, [isControlled, refreshing])
 
   useEffect(() => {
+    if (!enabled) return
     const el = containerRef.current
     if (!el) return
 
@@ -174,9 +176,9 @@ const PullToRefresh = ({
       el.removeEventListener('touchcancel', onTouchCancel)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [enabled])
 
-  const showIndicator = refreshing || pullPx > 0
+  const showIndicator = enabled && (refreshing || pullPx > 0)
   const indicatorHeight = showIndicator
     ? clamp(
         Math.round((pullPx / effectiveThreshold) * INDICATOR_MAX_HEIGHT_PX),

@@ -353,10 +353,11 @@ export const subscribeToNotifications = ({ userId, onChange } = {}) => {
   }
 
   try {
+    const client = supabase
     const uniqueSuffix = `${Date.now()}:${Math.random().toString(16).slice(2)}`
     const channelName = `notifications:${userId}:${uniqueSuffix}`
 
-    const channel = supabase
+    const channel = client
       .channel(channelName)
       .on(
         'postgres_changes',
@@ -385,7 +386,7 @@ export const subscribeToNotifications = ({ userId, onChange } = {}) => {
             Promise.resolve(channel.unsubscribe()).catch(() => {})
           }
 
-          Promise.resolve(supabase.removeChannel(channel)).catch(() => {})
+          Promise.resolve(client.removeChannel(channel)).catch(() => {})
         } catch (_e) {
           // ignore
         }

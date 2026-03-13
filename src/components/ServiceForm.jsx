@@ -57,6 +57,7 @@ import { log } from '@/lib/logger'
 import { normalizeImage, NormalizeImageError } from '@/services/imageNormalizeService'
 import { runHeicFlow, revokePreviewUrlIfNeeded } from '@/lib/heicClientConvert'
 import { resizeImageClient } from '@/lib/imageResizeClient'
+import { useOverlayLock } from '@/hooks/useOverlayLock'
 
 const PRICE_UNIT_OPTIONS = [
   { value: 'hora', label: 'Hora' },
@@ -422,6 +423,7 @@ const buildAvailabilitySummaryFromAvailableHours = (
 }
 
 const ServiceForm = ({ isOpen, onClose, onSave, editingService = null }) => {
+  useOverlayLock(!!isOpen)
   const { toast } = useToast()
   const { user } = useAuth()
   const [docsDialogOpen, setDocsDialogOpen] = useState(false)

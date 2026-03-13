@@ -21,9 +21,11 @@ export const useNetworkStatus = () => {
 
     window.addEventListener('online', update)
     window.addEventListener('offline', update)
+    window.addEventListener('joby:resume', update)
     return () => {
       window.removeEventListener('online', update)
       window.removeEventListener('offline', update)
+      window.removeEventListener('joby:resume', update)
     }
   }, [])
 

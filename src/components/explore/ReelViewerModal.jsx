@@ -5,7 +5,6 @@ import { ArrowLeft, Check, Eye, MessageCircle, Play, Pause, Plus, ThumbsUp, Volu
 import { Link, useNavigate } from 'react-router-dom'
 
 import { Button } from '@/components/ui/button'
-                    src={open ? (videoSrc || undefined) : undefined}
 import { useToast } from '@/components/ui/use-toast'
 import { useAuth } from '@/contexts/AuthContext'
 import { useLikes } from '@/contexts/LikesContext'
@@ -19,8 +18,11 @@ import { prefetchComments } from '@/hooks/useComments'
 import { hasSessionViewedVideo, incrementVideoView, markSessionViewedVideo } from '@/services/viewService'
 
 import { attemptPlayWithMuteFallback } from '@/lib/videoAudioPrefs'
+import { useOverlayLock } from '@/hooks/useOverlayLock'
+import { Z_FULLSCREEN_CONTENT, Z_FULLSCREEN_OVERLAY } from '@/design/overlayZIndexTokens'
 
 export const ReelViewerModal = ({ open, onOpenChange, video, author }) => {
+  useOverlayLock(!!open, { navMode: 'dim' })
   const { toast } = useToast()
   const { user: currentUser } = useAuth()
   const likes = useLikes()
@@ -73,8 +75,8 @@ export const ReelViewerModal = ({ open, onOpenChange, video, author }) => {
   useEffect(() => {
     if (!open) return
     if (!video?.id) return
-    void prefetchComments({ contentId: video.id, contentType: 'video', sort: 'new' })
-  }, [open, video?.id])
+    void prefetchComments({ contentId: video.id, contentType: 'video', sort: 'new', userId: currentUser?.id || null })
+  }, [currentUser?.id, open, video?.id])
 
   // Only keep src while modal is open.
   useEffect(() => {
@@ -576,7 +578,7 @@ export const ReelViewerModal = ({ open, onOpenChange, video, author }) => {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="fixed inset-0 z-[9999] bg-black"
+                className={`fixed inset-0 ${Z_FULLSCREEN_OVERLAY} bg-black`}
               />
             </DialogPrimitive.Overlay>
 
@@ -586,7 +588,7 @@ export const ReelViewerModal = ({ open, onOpenChange, video, author }) => {
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 transition={{ duration: 0.15 }}
-                className="fixed inset-0 z-[10000] h-[100dvh] w-full overflow-hidden bg-black"
+                className={`fixed inset-0 ${Z_FULLSCREEN_CONTENT} h-[100dvh] w-full overflow-hidden bg-black`}
               >
                 <DialogPrimitive.Title className="sr-only">Reels</DialogPrimitive.Title>
                 <DialogPrimitive.Description className="sr-only">
@@ -825,7 +827,7 @@ export const ReelViewerModal = ({ open, onOpenChange, video, author }) => {
                     <button
                       onPointerDown={() => {
                         if (!video?.id) return
-                        void prefetchComments({ contentId: video.id, contentType: 'video', sort: 'new' })
+                        void prefetchComments({ contentId: video.id, contentType: 'video', sort: 'new', userId: currentUser?.id || null })
                       }}
                       onClick={openComments}
                       className="flex flex-col items-center text-white hover:scale-110 transition-transform"

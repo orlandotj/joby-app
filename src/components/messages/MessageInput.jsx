@@ -2,6 +2,7 @@ import React, { useId, useState, useRef, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
+import { useOverlayLock } from '@/hooks/useOverlayLock'
 import {
   Send,
   Paperclip,
@@ -217,6 +218,8 @@ const MessageInput = ({ onSendMessage, onSendFile, onTyping }) => {
       })
     }
   }
+
+  useOverlayLock(!!isAttachComposeOpen, { lockScroll: false })
 
   return (
     <form ref={composerRef} onSubmit={handleSubmit} className="p-2 sm:p-2.5">

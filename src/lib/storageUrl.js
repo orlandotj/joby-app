@@ -9,6 +9,71 @@ const SIGNED_URL_STORAGE_PREFIX = 'joby:signedUrl:v1:'
 const getSignedCacheKey = (bucket, path, expiresIn) =>
   `${bucket}:${path}:${typeof expiresIn === 'number' ? expiresIn : 3600}`
 
+// P1: protect Supabase auth lock by avoiding bursts of concurrent createSignedUrl calls.
+// - Dedupe in-flight by a stable key (bucket + path + expiresIn)
+// - Global concurrency limiter (max N simultaneous createSignedUrl)
+const SIGNED_URL_MAX_CONCURRENCY = 3
+let signedUrlActiveCount = 0
+const signedUrlWaitQueue = []
+const signedUrlInFlight = new Map()
+
+const acquireSignedUrlSlot = async () => {
+  if (signedUrlActiveCount < SIGNED_URL_MAX_CONCURRENCY) {
+    signedUrlActiveCount += 1
+    return
+  }
+
+  await new Promise((resolve) => {
+    signedUrlWaitQueue.push(() => {
+      signedUrlActiveCount += 1
+      resolve()
+    })
+  })
+}
+
+const releaseSignedUrlSlot = () => {
+  signedUrlActiveCount = Math.max(0, signedUrlActiveCount - 1)
+  const next = signedUrlWaitQueue.shift()
+  if (next) next()
+}
+
+const createSignedUrlDeduped = async (bucket, path, expiresIn) => {
+  const exp =
+    typeof expiresIn === 'number' && Number.isFinite(expiresIn) ? expiresIn : 3600
+
+  const inFlightKey = getSignedCacheKey(bucket, path, exp)
+  const existing = signedUrlInFlight.get(inFlightKey)
+  if (existing) return existing
+
+  const promise = (async () => {
+    await acquireSignedUrlSlot()
+    try {
+      const { data, error } = await supabase.storage
+        .from(bucket)
+        .createSignedUrl(path, exp)
+      if (error) throw error
+      return data?.signedUrl || ''
+    } finally {
+      releaseSignedUrlSlot()
+    }
+  })()
+
+  signedUrlInFlight.set(inFlightKey, promise)
+
+  // Cleanup without creating an unhandled-rejection-prone derived promise.
+  // (Using .finally() would create a new promise that could reject if unused.)
+  void promise.then(
+    () => {
+      if (signedUrlInFlight.get(inFlightKey) === promise) signedUrlInFlight.delete(inFlightKey)
+    },
+    () => {
+      if (signedUrlInFlight.get(inFlightKey) === promise) signedUrlInFlight.delete(inFlightKey)
+    }
+  )
+
+  return promise
+}
+
 const readPersistedSignedUrl = (key) => {
   try {
     const raw = localStorage.getItem(`${SIGNED_URL_STORAGE_PREFIX}${key}`)
@@ -312,13 +377,7 @@ export const resolveStorageUrl = async (
   }
 
   try {
-    const { data, error } = await supabase.storage
-      .from(parsed.bucket)
-      .createSignedUrl(parsed.path, expiresIn)
-
-    if (error) throw error
-
-    const signedUrl = data?.signedUrl
+    const signedUrl = await createSignedUrlDeduped(parsed.bucket, parsed.path, expiresIn)
     if (signedUrl) {
       // Cache slightly less than expiry to avoid edge timing issues
       const expiresAt = now + Math.max(5_000, (expiresIn - 30) * 1000)

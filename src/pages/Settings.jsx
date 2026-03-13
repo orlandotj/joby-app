@@ -12,6 +12,7 @@ import {
   Moon,
   Monitor,
   User,
+  Settings as SettingsIcon,
   Wallet,
   Briefcase,
   Bell,
@@ -34,6 +35,7 @@ import {
   Phone,
 } from 'lucide-react'
 import { log } from '@/lib/logger'
+import JobyPageHeader from '@/components/JobyPageHeader'
 
 const Settings = () => {
   const { user, logout } = useAuth()
@@ -76,8 +78,12 @@ const Settings = () => {
   }
 
   return (
-    <div className="container max-w-4xl mx-auto p-4 py-8 space-y-6 pb-24">
-      <h1 className="text-3xl font-bold mb-6">Configurações</h1>
+    <div className="w-full space-y-6 pb-24">
+      <JobyPageHeader
+        icon={<SettingsIcon size={23} className="text-primary-foreground" />}
+        title="Configurações"
+        subtitle="Gerencie sua conta, notificações e preferências"
+      />
 
       {/* 1. Conta e Perfil */}
       <Card className="overflow-hidden border-border/50">

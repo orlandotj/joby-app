@@ -20,6 +20,16 @@ import {
 } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Card } from '@/components/ui/card'
 import ConversationList from '@/components/messages/ConversationList'
 import ContactList from '@/components/messages/ContactList'
@@ -92,8 +102,12 @@ const Messages = () => {
   const [serviceRequests, setServiceRequests] = useState([])
   const [serviceRequestsLoading, setServiceRequestsLoading] = useState(false)
   const [openServiceRequestMenuId, setOpenServiceRequestMenuId] = useState(null)
+  const [serviceRequestConfirmOpen, setServiceRequestConfirmOpen] = useState(false)
+  const [serviceRequestConfirmTarget, setServiceRequestConfirmTarget] = useState(null)
   const [conversations, setConversations] = useState([])
   const [activeConversation, setActiveConversation] = useState(null)
+  const [conversationConfirmOpen, setConversationConfirmOpen] = useState(false)
+  const [conversationConfirmTarget, setConversationConfirmTarget] = useState(null)
   const [messages, setMessages] = useState([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(null)
@@ -102,6 +116,7 @@ const Messages = () => {
   const [keyboardHeight, setKeyboardHeight] = useState(0)
   const [isDesktopViewport, setIsDesktopViewport] = useState(false)
   const [mobileComposerHeight, setMobileComposerHeight] = useState(0)
+  const [resetTick, setResetTick] = useState(0)
   const typingTimeoutRef = useRef(null)
   const typingChannelRef = useRef(null)
   const messagesEndRef = useRef(null)
@@ -116,10 +131,46 @@ const Messages = () => {
   const viewportRafRef = useRef(null)
   const lastKeyboardHeightRef = useRef(0)
 
+  const openConversationSeqRef = useRef(0)
+  const openConversationLatestRef = useRef({ seq: 0, key: '' })
+  const openConversationInFlightByKeyRef = useRef(new Map())
+
+  const markReadDisabledRef = useRef(false)
+  const markReadStateByKeyRef = useRef(new Map())
+
   useEffect(() => {
     if (import.meta.env.DEV) log.debug('MESSAGES', 'mount Messages')
     return () => {
       if (import.meta.env.DEV) log.debug('MESSAGES', 'unmount Messages')
+    }
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      markReadDisabledRef.current = true
+      try {
+        const state = markReadStateByKeyRef.current
+        for (const v of state.values()) {
+          if (v?.timerId) {
+            try {
+              window.clearTimeout(v.timerId)
+            } catch {
+              // ignore
+            }
+          }
+        }
+        state.clear()
+      } catch {
+        // ignore
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    const handler = () => setResetTick((v) => v + 1)
+    window.addEventListener('supabase:reset', handler)
+    return () => {
+      window.removeEventListener('supabase:reset', handler)
     }
   }, [])
 
@@ -205,6 +256,185 @@ const Messages = () => {
     return msg.includes('could not find') && msg.includes('relationship')
   }
 
+  const getConversationKey = (otherUserId, serviceRequestId) =>
+    `${String(otherUserId || '').trim()}::${String(serviceRequestId || '').trim()}`
+
+  const markConversationAsReadNow = async ({ senderId, serviceRequestId }) => {
+    if (markReadDisabledRef.current) return
+    if (!user?.id) return
+
+    const otherId = String(senderId || '').trim()
+    const req = String(serviceRequestId || '').trim()
+    if (!otherId) return
+
+    // latest-wins: only mark if this conversation is still the active one
+    const current = activeConversationRef.current
+    const currentOtherId = String(current?.user?.id || '').trim()
+    const currentReq = String(current?.serviceRequestId || '').trim()
+    if (currentOtherId !== otherId) return
+    if (currentReq !== req) return
+
+    try {
+      const now = new Date().toISOString()
+
+      // Preferir RPC (SECURITY DEFINER) quando NÃO for chat de solicitação.
+      // No modo service, a RPC marcaria mensagens fora da solicitação.
+      if (!req) {
+        try {
+          await supabase.rpc('mark_messages_as_read', {
+            sender_uuid: otherId,
+            receiver_uuid: user.id,
+          })
+        } catch (_e) {
+          // segue com update direto
+        }
+      }
+
+      // Tentativa 1: schema com read_at + is_read
+      let q = supabase
+        .from('messages')
+        .update({ is_read: true, read_at: now })
+        .eq('receiver_id', user.id)
+        .eq('sender_id', otherId)
+        .or('is_read.is.null,is_read.eq.false')
+        .is('read_at', null)
+
+      q = req ? q.eq('request_id', req) : q.is('request_id', null)
+
+      let res = await q
+
+      if (res?.error) {
+        const code = String(res.error?.code || '')
+        // Fallback: schema só com read_at
+        if (code === '42703') {
+          let q2 = supabase
+            .from('messages')
+            .update({ read_at: now })
+            .eq('receiver_id', user.id)
+            .eq('sender_id', otherId)
+            .is('read_at', null)
+
+          q2 = req ? q2.eq('request_id', req) : q2.is('request_id', null)
+          res = await q2
+        }
+      }
+
+      if (res?.error) {
+        // Fallback: schema só com is_read
+        let q3 = supabase
+          .from('messages')
+          .update({ is_read: true })
+          .eq('receiver_id', user.id)
+          .eq('sender_id', otherId)
+          .or('is_read.is.null,is_read.eq.false')
+
+        q3 = req ? q3.eq('request_id', req) : q3.is('request_id', null)
+        res = await q3
+      }
+
+      // Se o schema não tem request_id, tenta novamente sem filtrar
+      if (res?.error && isMissingColumn(res.error, 'request_id')) {
+        res = await supabase
+          .from('messages')
+          .update({ is_read: true })
+          .eq('receiver_id', user.id)
+          .eq('sender_id', otherId)
+          .or('is_read.is.null,is_read.eq.false')
+      }
+
+      if (res?.error) log.error('MESSAGES', 'Erro ao marcar como lido', res.error)
+
+      try {
+        window.dispatchEvent(new CustomEvent('messages:changed'))
+      } catch (_e) {
+        // ignore
+      }
+    } catch (_e) {
+      // best-effort
+    }
+  }
+
+  const scheduleMarkConversationAsRead = ({ senderId, serviceRequestId }) => {
+    if (markReadDisabledRef.current) return
+    if (!user?.id) return
+
+    const otherId = String(senderId || '').trim()
+    const req = String(serviceRequestId || '').trim()
+    if (!otherId) return
+
+    const key = getConversationKey(otherId, req)
+    const state = markReadStateByKeyRef.current
+
+    const existing = state.get(key) || {
+      timerId: null,
+      inFlight: null,
+      pending: false,
+      lastArgs: { senderId: otherId, serviceRequestId: req },
+    }
+
+    existing.lastArgs = { senderId: otherId, serviceRequestId: req }
+
+    if (existing.inFlight) {
+      existing.pending = true
+      state.set(key, existing)
+      return
+    }
+
+    if (existing.timerId) {
+      state.set(key, existing)
+      return
+    }
+
+    existing.timerId = window.setTimeout(() => {
+      const current = state.get(key)
+      if (!current) return
+
+      current.timerId = null
+      if (current.inFlight) {
+        current.pending = true
+        state.set(key, current)
+        return
+      }
+
+      current.inFlight = (async () => {
+        await markConversationAsReadNow(current.lastArgs)
+      })()
+
+      state.set(key, current)
+
+      void current.inFlight.then(
+        () => {
+          const after = state.get(key)
+          if (!after) return
+          after.inFlight = null
+          const rerun = after.pending
+          after.pending = false
+          if (!rerun) {
+            state.delete(key)
+            return
+          }
+          state.set(key, after)
+          scheduleMarkConversationAsRead(after.lastArgs)
+        },
+        () => {
+          const after = state.get(key)
+          if (!after) return
+          after.inFlight = null
+          const rerun = after.pending
+          after.pending = false
+          if (!rerun) {
+            state.delete(key)
+            return
+          }
+          state.set(key, after)
+          scheduleMarkConversationAsRead(after.lastArgs)
+        }
+      )
+    }, 200)
+
+    state.set(key, existing)
+  }
+
   const getBookingStatusLabel = (status) => {
     const s = String(status || '').toLowerCase()
     if (s === 'pending') return 'Pendente'
@@ -216,12 +446,9 @@ const Messages = () => {
     return s ? s : '-'
   }
 
-  const archiveServiceRequest = async (booking) => {
+  const performArchiveServiceRequest = async (booking) => {
     const bookingId = booking?.id
     if (!bookingId) return
-
-    const confirmArchive = window.confirm('Deseja arquivar esta solicitação?')
-    if (!confirmArchive) return
 
     setServiceRequests((prev) =>
       (prev || []).map((b) => (String(b?.id) === String(bookingId) ? { ...b, status: 'archived' } : b))
@@ -247,12 +474,9 @@ const Messages = () => {
     }
   }
 
-  const deleteServiceRequest = async (booking) => {
+  const performDeleteServiceRequest = async (booking) => {
     const bookingId = booking?.id
     if (!bookingId) return
-
-    const confirmDelete = window.confirm('Deseja apagar esta solicitação? Esta ação não pode ser desfeita.')
-    if (!confirmDelete) return
 
     setServiceRequests((prev) => (prev || []).filter((b) => String(b?.id) !== String(bookingId)))
 
@@ -287,6 +511,20 @@ const Messages = () => {
       })
       loadServiceRequests()
     }
+  }
+
+  const archiveServiceRequest = (booking) => {
+    const bookingId = booking?.id
+    if (!bookingId) return
+    setServiceRequestConfirmTarget({ kind: 'archive', booking })
+    setServiceRequestConfirmOpen(true)
+  }
+
+  const deleteServiceRequest = (booking) => {
+    const bookingId = booking?.id
+    if (!bookingId) return
+    setServiceRequestConfirmTarget({ kind: 'delete', booking })
+    setServiceRequestConfirmOpen(true)
   }
 
   const getServiceChatParams = () => {
@@ -852,16 +1090,22 @@ const Messages = () => {
   useEffect(() => {
     if (!user?.id) return
 
+    const client = supabase
     const channelName = `inbox:${user.id}`
 
-    const existingChannel = supabase
+    const existingChannel = client
       .getChannels()
       .find((ch) => ch.topic === `realtime:${channelName}`)
     if (existingChannel) {
-      supabase.removeChannel(existingChannel)
+      try {
+        existingChannel.unsubscribe?.()
+      } catch {
+        // ignore
+      }
+      client.removeChannel(existingChannel)
     }
 
-    const channel = supabase
+    const channel = client
       .channel(channelName)
       .on(
         'postgres_changes',
@@ -907,59 +1151,8 @@ const Messages = () => {
               return [...prev, formattedMsg]
             })
 
-            // Marca como lida imediatamente quando o chat está aberto
-            ;(async () => {
-              try {
-                const now = new Date().toISOString()
-
-                // Preferir RPC (SECURITY DEFINER) para contornar RLS quando necessário
-                try {
-                  await supabase.rpc('mark_messages_as_read', {
-                    sender_uuid: String(msg.sender_id),
-                    receiver_uuid: user.id,
-                  })
-                } catch (_e) {
-                  // segue para update direto
-                }
-
-                // Tentativa 1: schema com read_at + is_read
-                let r = await supabase
-                  .from('messages')
-                  .update({ is_read: true, read_at: now })
-                  .eq('id', msg.id)
-                  .or('is_read.is.null,is_read.eq.false')
-                  .is('read_at', null)
-
-                if (r?.error) {
-                  const code = String(r.error?.code || '')
-                  if (code === '42703') {
-                    // Fallback: schema só com read_at
-                    r = await supabase
-                      .from('messages')
-                      .update({ read_at: now })
-                      .eq('id', msg.id)
-                      .is('read_at', null)
-                  }
-                }
-
-                if (r?.error) {
-                  // Fallback: schema só com is_read
-                  r = await supabase
-                    .from('messages')
-                    .update({ is_read: true })
-                    .eq('id', msg.id)
-                    .or('is_read.is.null,is_read.eq.false')
-                }
-
-                try {
-                  window.dispatchEvent(new CustomEvent('messages:changed'))
-                } catch (_e) {
-                  // ignore
-                }
-              } catch (_e) {
-                // ignore
-              }
-            })()
+            // P2: não marcar como lida aqui para evitar duplicação com subscribeToMessages
+            // quando o chat está aberto.
           }
 
           // Atualiza a lista de conversas (lastMessage/unread) sem recarregar a página
@@ -1056,9 +1249,14 @@ const Messages = () => {
       .subscribe()
 
     return () => {
-      supabase.removeChannel(channel)
+      try {
+        channel.unsubscribe?.()
+      } catch {
+        // ignore
+      }
+      client.removeChannel(channel)
     }
-  }, [user?.id])
+  }, [user?.id, resetTick])
 
   const loadConversations = async () => {
     if (!user?.id) {
@@ -1152,6 +1350,19 @@ const Messages = () => {
 
     const serviceRequestId = String(conversation?.serviceRequestId || '').trim()
 
+    const conversationKey = getConversationKey(otherUserId, serviceRequestId)
+    // latest-wins: só incrementa quando muda de conversa (A->A não deve invalidar o próprio fetch)
+    const latest = openConversationLatestRef.current || { seq: 0, key: '' }
+    const seq =
+      latest.key === conversationKey ? latest.seq : (openConversationSeqRef.current += 1)
+    if (latest.key !== conversationKey) {
+      openConversationLatestRef.current = { seq, key: conversationKey }
+    }
+
+    const isStale = () =>
+      openConversationLatestRef.current.seq !== seq ||
+      openConversationLatestRef.current.key !== conversationKey
+
     // Zera unread imediatamente (UX + evita "travado em não lidas" quando RLS impede UPDATE)
     setConversations((prev) =>
       prev.map((c) => (c?.user?.id === otherUserId ? { ...c, unread: 0 } : c))
@@ -1177,7 +1388,13 @@ const Messages = () => {
       }
     }
 
-    try {
+    // Dedupe APENAS da fase assíncrona (fetch + pós-processamento + mark-as-read)
+    const inFlightMap = openConversationInFlightByKeyRef.current
+    const existingEntry = inFlightMap.get(conversationKey)
+    if (existingEntry?.promise && existingEntry.seq === seq) return existingEntry.promise
+
+    const run = async () => {
+      try {
       // Buscar todas as mensagens dessa conversa
       let conversationMessages = null
       let error = null
@@ -1255,6 +1472,8 @@ const Messages = () => {
         }),
       }))
 
+      if (isStale()) return
+
       setMessages(formattedMessages)
 
       pendingScrollToBottomRef.current = true
@@ -1263,93 +1482,27 @@ const Messages = () => {
       // Fazemos após setMessages para garantir que o DOM já tenha renderizado.
       scrollToBottomAfterLayout('auto')
 
-      // Marcar mensagens como lidas
-      try {
-        const now = new Date().toISOString()
+      if (isStale()) return
 
-        // Preferir RPC (SECURITY DEFINER) quando NÃO for chat de solicitação.
-        // No modo service, a RPC marcaria mensagens fora da solicitação.
-        if (!serviceRequestId) {
-          try {
-            await supabase.rpc('mark_messages_as_read', {
-              sender_uuid: conversation.user.id,
-              receiver_uuid: user.id,
-            })
-          } catch (_e) {
-            // segue com update direto
-          }
-        }
+      // UI: manter comportamento anterior (limpar badge imediatamente ao abrir)
+      setConversations((prev) =>
+        prev.map((c) => (c?.user?.id === otherUserId ? { ...c, unread: 0 } : c))
+      )
 
-        // Tentativa 1: schema com read_at + is_read
-        let q = supabase
-          .from('messages')
-          .update({ is_read: true, read_at: now })
-          .eq('receiver_id', user.id)
-          .eq('sender_id', conversation.user.id)
-          .or('is_read.is.null,is_read.eq.false')
-          .is('read_at', null)
-
-        q = serviceRequestId ? q.eq('request_id', serviceRequestId) : q.is('request_id', null)
-
-        let res = await q
-
-        if (res?.error) {
-          const code = String(res.error?.code || '')
-          // Fallback: schema só com read_at
-          if (code === '42703') {
-            let q2 = supabase
-              .from('messages')
-              .update({ read_at: now })
-              .eq('receiver_id', user.id)
-              .eq('sender_id', conversation.user.id)
-              .is('read_at', null)
-
-            q2 = serviceRequestId ? q2.eq('request_id', serviceRequestId) : q2.is('request_id', null)
-            res = await q2
-          }
-        }
-
-        if (res?.error) {
-          // Fallback: schema só com is_read
-          let q3 = supabase
-            .from('messages')
-            .update({ is_read: true })
-            .eq('receiver_id', user.id)
-            .eq('sender_id', conversation.user.id)
-            .or('is_read.is.null,is_read.eq.false')
-
-          q3 = serviceRequestId ? q3.eq('request_id', serviceRequestId) : q3.is('request_id', null)
-          res = await q3
-        }
-
-        // Se o schema não tem request_id, tenta novamente sem filtrar
-        if (res?.error && isMissingColumn(res.error, 'request_id')) {
-          res = await supabase
-            .from('messages')
-            .update({ is_read: true })
-            .eq('receiver_id', user.id)
-            .eq('sender_id', conversation.user.id)
-            .or('is_read.is.null,is_read.eq.false')
-        }
-
-        if (res?.error) log.error('MESSAGES', 'Erro ao marcar como lido', res.error)
-
-        // UI: reforço final para evitar badge preso
-        setConversations((prev) =>
-          prev.map((c) => (c?.user?.id === otherUserId ? { ...c, unread: 0 } : c))
-        )
-
-        try {
-          window.dispatchEvent(new CustomEvent('messages:changed'))
-        } catch (_e) {
-          // ignore
-        }
-      } catch (e) {
-        log.error('MESSAGES', 'Erro ao marcar como lido', e)
-      }
+      scheduleMarkConversationAsRead({ senderId: otherUserId, serviceRequestId })
     } catch (error) {
       log.error('MESSAGES', 'Erro ao carregar mensagens', error)
     }
+    }
+
+    const promise = run()
+    inFlightMap.set(conversationKey, { promise, seq })
+    void promise.finally(() => {
+      const curr = inFlightMap.get(conversationKey)
+      if (curr?.promise === promise) inFlightMap.delete(conversationKey)
+    })
+
+    return promise
   }
 
   const handleSelectConversation = async (conversation) => {
@@ -1500,57 +1653,7 @@ const Messages = () => {
             prev.map((c) => (c?.user?.id === otherId ? { ...c, unread: 0 } : c))
           )
 
-          ;(async () => {
-            const now = new Date().toISOString()
-            try {
-              // Preferir RPC (SECURITY DEFINER)
-              try {
-                await supabase.rpc('mark_messages_as_read', {
-                  sender_uuid: otherId,
-                  receiver_uuid: user.id,
-                })
-              } catch (_e) {
-                // segue para updates diretos
-              }
-
-              // Tentativa 1: read_at + is_read
-              let r = await supabase
-                .from('messages')
-                .update({ is_read: true, read_at: now })
-                .eq('id', newMessage.id)
-                .or('is_read.is.null,is_read.eq.false')
-                .is('read_at', null)
-
-              if (r?.error) {
-                const code = String(r.error?.code || '')
-                if (code === '42703') {
-                  // Fallback: só read_at
-                  r = await supabase
-                    .from('messages')
-                    .update({ read_at: now })
-                    .eq('id', newMessage.id)
-                    .is('read_at', null)
-                }
-              }
-
-              if (r?.error) {
-                // Fallback: só is_read
-                await supabase
-                  .from('messages')
-                  .update({ is_read: true })
-                  .eq('id', newMessage.id)
-                  .or('is_read.is.null,is_read.eq.false')
-              }
-
-              try {
-                window.dispatchEvent(new CustomEvent('messages:changed'))
-              } catch (_e) {
-                // ignore
-              }
-            } catch (_e) {
-              // silencioso
-            }
-          })()
+          scheduleMarkConversationAsRead({ senderId: otherId, serviceRequestId })
         }
       }
     )
@@ -1563,7 +1666,7 @@ const Messages = () => {
       unsubscribeMessages()
       unsubscribeTyping()
     }
-  }, [user?.id, activeConversation?.user?.id])
+  }, [user?.id, activeConversation?.user?.id, resetTick])
 
   // Auto-scroll para última mensagem
   useEffect(() => {
@@ -1596,7 +1699,8 @@ const Messages = () => {
     // Enviar sinal de digitação
     if (!typingChannelRef.current) {
       typingChannelRef.current = await sendTypingIndicator(
-        activeConversation.user.id
+        activeConversation.user.id,
+        { senderId: user?.id || null }
       )
     }
 
@@ -1964,16 +2068,10 @@ const Messages = () => {
     )
   }
 
-  const handleDeleteConversation = async () => {
-    if (!activeConversation) return
-
-    const label = getProfileDisplayName(activeConversation.user)
-
-    const confirmDelete = window.confirm(
-      `Deseja realmente apagar todas as mensagens com ${label}? Esta ação não pode ser desfeita.`
-    )
-
-    if (!confirmDelete) return
+  const performDeleteConversationMessages = async (target) => {
+    if (!target?.conversationId || !target?.otherUserId) return
+    if (!user?.id) return
+    if (String(activeConversation?.id || '') !== String(target.conversationId)) return
 
     try {
       // Deletar todas as mensagens da conversa no Supabase
@@ -1981,7 +2079,7 @@ const Messages = () => {
         .from('messages')
         .delete()
         .or(
-          `and(sender_id.eq.${user.id},receiver_id.eq.${activeConversation.user.id}),and(sender_id.eq.${activeConversation.user.id},receiver_id.eq.${user.id})`
+          `and(sender_id.eq.${user.id},receiver_id.eq.${target.otherUserId}),and(sender_id.eq.${target.otherUserId},receiver_id.eq.${user.id})`
         )
 
       if (error) throw error
@@ -1992,7 +2090,7 @@ const Messages = () => {
       // Atualizar a conversa na lista para remover a última mensagem
       setConversations((prev) =>
         prev.map((c) =>
-          c.id === activeConversation.id
+          c.id === target.conversationId
             ? { ...c, lastMessage: '', unread: 0 }
             : c
         )
@@ -2005,25 +2103,42 @@ const Messages = () => {
     }
   }
 
+  const performArchiveConversation = (target) => {
+    if (!target?.conversationId) return
+    if (String(activeConversation?.id || '') !== String(target.conversationId)) return
+
+    // Remover conversa da lista
+    setConversations((prev) => prev.filter((c) => c.id !== target.conversationId))
+    setActiveConversation(null)
+    setMessages([])
+
+    alert(`Conversa com ${target.label || 'este contato'} arquivada!`)
+  }
+
+  const handleDeleteConversation = () => {
+    if (!activeConversation) return
+
+    const label = getProfileDisplayName(activeConversation.user)
+    setConversationConfirmTarget({
+      kind: 'delete_messages',
+      conversationId: activeConversation.id,
+      otherUserId: activeConversation.user?.id,
+      label,
+    })
+    setConversationConfirmOpen(true)
+  }
+
   const handleArchiveConversation = () => {
     if (!activeConversation) return
 
     const label = getProfileDisplayName(activeConversation.user)
-
-    const confirmArchive = window.confirm(
-      `Deseja arquivar a conversa com ${label}?`
-    )
-
-    if (!confirmArchive) return
-
-    // Remover conversa da lista
-    setConversations((prev) =>
-      prev.filter((c) => c.id !== activeConversation.id)
-    )
-    setActiveConversation(null)
-    setMessages([])
-
-    alert(`Conversa com ${label} arquivada!`)
+    setConversationConfirmTarget({
+      kind: 'archive_conversation',
+      conversationId: activeConversation.id,
+      otherUserId: activeConversation.user?.id,
+      label,
+    })
+    setConversationConfirmOpen(true)
   }
 
   const handleMuteConversation = () => {
@@ -2915,6 +3030,98 @@ const Messages = () => {
         setIsOpen={setIsBookingModalOpen}
         professional={selectedProfessional}
       />
+
+      <AlertDialog
+        open={serviceRequestConfirmOpen}
+        onOpenChange={(open) => {
+          setServiceRequestConfirmOpen(open)
+          if (!open) setServiceRequestConfirmTarget(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {serviceRequestConfirmTarget?.kind === 'delete'
+                ? 'Apagar solicitação?'
+                : 'Arquivar solicitação?'}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {serviceRequestConfirmTarget?.kind === 'delete'
+                ? 'Isso apaga a solicitação e remove a conversa associada. Essa ação não pode ser desfeita.'
+                : 'A solicitação será movida para arquivadas. Você pode desfazer alterando o status depois.'}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Voltar</AlertDialogCancel>
+            <AlertDialogAction
+              className={
+                serviceRequestConfirmTarget?.kind === 'delete'
+                  ? 'bg-destructive text-destructive-foreground hover:bg-destructive/90'
+                  : undefined
+              }
+              onClick={async () => {
+                const target = serviceRequestConfirmTarget
+                if (!target?.booking) return
+
+                setServiceRequestConfirmOpen(false)
+                setServiceRequestConfirmTarget(null)
+
+                if (target.kind === 'delete') return performDeleteServiceRequest(target.booking)
+                return performArchiveServiceRequest(target.booking)
+              }}
+            >
+              {serviceRequestConfirmTarget?.kind === 'delete' ? 'Apagar' : 'Arquivar'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={conversationConfirmOpen}
+        onOpenChange={(open) => {
+          setConversationConfirmOpen(open)
+          if (!open) setConversationConfirmTarget(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {conversationConfirmTarget?.kind === 'delete_messages'
+                ? 'Apagar mensagens?'
+                : 'Arquivar conversa?'}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {conversationConfirmTarget?.kind === 'delete_messages'
+                ? `Deseja realmente apagar todas as mensagens com ${conversationConfirmTarget?.label || 'este contato'}? Esta ação não pode ser desfeita.`
+                : `Deseja arquivar a conversa com ${conversationConfirmTarget?.label || 'este contato'}?`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Voltar</AlertDialogCancel>
+            <AlertDialogAction
+              className={
+                conversationConfirmTarget?.kind === 'delete_messages'
+                  ? 'bg-destructive text-destructive-foreground hover:bg-destructive/90'
+                  : undefined
+              }
+              onClick={() => {
+                const target = conversationConfirmTarget
+                if (!target) return
+
+                setConversationConfirmOpen(false)
+                setConversationConfirmTarget(null)
+
+                if (target.kind === 'delete_messages') return performDeleteConversationMessages(target)
+                return performArchiveConversation(target)
+              }}
+            >
+              {conversationConfirmTarget?.kind === 'delete_messages'
+                ? 'Apagar mensagens'
+                : 'Arquivar'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

@@ -2,22 +2,32 @@ import React from 'react'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { X } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { useOverlayLock } from '@/hooks/useOverlayLock'
+import { Z_DIALOG_CONTENT, Z_DIALOG_OVERLAY } from '@/design/overlayZIndexTokens'
 
-// Wrapper que adiciona controle de scroll do body
-const DialogRoot = ({ open, onOpenChange, children, ...props }) => {
+// Wrapper que adiciona infraestrutura global de overlay (classe + scroll lock)
+const DialogRoot = ({ open, defaultOpen, onOpenChange, navMode = 'dim', children, ...props }) => {
+  const [openState, setOpenState] = React.useState(!!(open ?? defaultOpen))
+
   React.useEffect(() => {
-    if (open) {
-      document.body.style.overflow = 'hidden'
-    } else {
-      document.body.style.overflow = ''
-    }
-    return () => {
-      document.body.style.overflow = ''
-    }
+    if (open === undefined) return
+    setOpenState(!!open)
   }, [open])
 
+  useOverlayLock(!!openState, { navMode })
+
+  const handleOpenChange = (next) => {
+    setOpenState(!!next)
+    onOpenChange?.(next)
+  }
+
   return (
-    <DialogPrimitive.Root open={open} onOpenChange={onOpenChange} {...props}>
+    <DialogPrimitive.Root
+      open={open}
+      defaultOpen={defaultOpen}
+      onOpenChange={handleOpenChange}
+      {...props}
+    >
       {children}
     </DialogPrimitive.Root>
   )
@@ -35,7 +45,7 @@ const DialogOverlay = React.forwardRef(({ className, ...props }, ref) => (
   <DialogPrimitive.Overlay
     ref={ref}
     className={cn(
-      'fixed inset-0 z-[9999] bg-black/40 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
+      `fixed inset-0 ${Z_DIALOG_OVERLAY} bg-black/40 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0`,
       className
     )}
     {...props}
@@ -50,7 +60,7 @@ const DialogContent = React.forwardRef(
       <DialogPrimitive.Content
         ref={ref}
         className={cn(
-          'fixed left-[50%] top-[50%] translate-x-[-50%] translate-y-[-50%] z-[10000] w-full max-w-lg bg-background border shadow-lg sm:rounded-lg overflow-hidden',
+          `fixed left-[50%] top-[50%] translate-x-[-50%] translate-y-[-50%] ${Z_DIALOG_CONTENT} w-[calc(100vw-1.5rem)] max-w-lg bg-background border border-border/60 shadow-2xl rounded-3xl overflow-hidden`,
           className
         )}
         style={{ maxHeight: '90vh' }}
@@ -66,7 +76,7 @@ const DialogContent = React.forwardRef(
         >
           <div className="p-6 gap-4">{children}</div>
         </div>
-        <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground z-10">
+        <DialogPrimitive.Close className="absolute right-3 top-3 sm:right-4 sm:top-4 z-20 h-10 w-10 rounded-full bg-background/70 backdrop-blur border border-border/60 text-foreground/80 transition-colors hover:bg-background/90 hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none">
           <X className="h-4 w-4" />
           <span className="sr-only">Close</span>
         </DialogPrimitive.Close>

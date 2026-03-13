@@ -115,6 +115,12 @@ export async function uploadVideoToCloudflare({
   videoType = 'short',
   onProgress = null,
 }) {
+  // Legacy endpoint disabled (Worker POST /upload-video now returns 410).
+  // Keep this export only to fail fast if some old code path still calls it.
+  throw new Error(
+    'Upload de vídeo via Worker (/upload-video) foi desativado. Use o upload autenticado via Node (/api/upload-video-faststart).'
+  )
+
   assertWorkerUrl();
 
   const uploadUrl = buildWorkerUrl('/upload-video');
@@ -197,6 +203,7 @@ export async function uploadVideoFaststart({
   uploadType = null,
   videoType = 'short',
   onProgress = null,
+  accessToken = null,
 }) {
   assertFaststartUrl();
 
@@ -235,13 +242,16 @@ export async function uploadVideoFaststart({
 
   formData.append('videoType', videoType);
 
+  const headers = accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined
+
   if (typeof onProgress === 'function') {
-    return await uploadWithXHR(uploadUrl, formData, onProgress);
+    return await uploadWithXHR(uploadUrl, formData, onProgress, { headers });
   }
 
   const response = await fetch(uploadUrl, {
     method: 'POST',
     body: formData,
+    ...(headers ? { headers } : null),
   });
 
   const text = await response.text();
@@ -265,7 +275,7 @@ export async function uploadVideoFaststart({
 /**
  * Upload via XHR com progresso real
  */
-function uploadWithXHR(url, formData, onProgress) {
+function uploadWithXHR(url, formData, onProgress, { headers } = {}) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
 
@@ -312,6 +322,9 @@ function uploadWithXHR(url, formData, onProgress) {
     });
 
     xhr.open('POST', url);
+    if (headers && headers.Authorization) {
+      xhr.setRequestHeader('Authorization', headers.Authorization);
+    }
     xhr.send(formData);
   });
 }
@@ -319,7 +332,8 @@ function uploadWithXHR(url, formData, onProgress) {
 /**
  * Verifica se o Worker está acessível
  * - tenta /health (se existir)
- * - senão faz OPTIONS em /upload-video
+ *
+ * Nota: não fazemos mais probe em /upload-video (rota de upload legado desativada).
  */
 export async function checkWorkerHealth() {
   // Sem URL -> tenta mesma origem (proxy do Vite em dev)
@@ -332,13 +346,6 @@ export async function checkWorkerHealth() {
     // ignore
   }
 
-  // fallback: OPTIONS /upload-video
-  try {
-    const response = await fetch(buildWorkerUrl('/upload-video'), {
-      method: 'OPTIONS',
-    });
-    return { available: response.ok };
-  } catch (error) {
-    return { available: false, error: error.message };
-  }
+  // Do NOT probe /upload-video: it is intentionally disabled (410) and OPTIONS can be misleading.
+  return { available: false };
 }

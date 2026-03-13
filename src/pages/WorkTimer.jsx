@@ -4,6 +4,8 @@ import { motion } from 'framer-motion'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { tabsPillList, tabsPillTrigger } from '@/design/tabTokens'
+import JobyPageHeader from '@/components/JobyPageHeader'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { useToast } from '@/components/ui/use-toast'
 import {
@@ -32,6 +34,7 @@ import {
   CalendarDays,
   MapPin,
   ChevronRight,
+  Timer,
   Wallet,
   Eye,
 } from 'lucide-react'
@@ -1145,11 +1148,20 @@ const WorkTimer = () => {
   const jobyWorkArcGradientId = `jobyWorkArc-${gradientInstanceIdSafe}`
 
   const [activeTab, setActiveTab] = useState('mine')
+  const [resetTick, setResetTick] = useState(0)
 
   useEffect(() => {
     const desired = location?.state?.initialTab
     if (desired === 'mine' || desired === 'staff') setActiveTab(desired)
   }, [location?.state?.initialTab])
+
+  useEffect(() => {
+    const handler = () => setResetTick((v) => v + 1)
+    window.addEventListener('supabase:reset', handler)
+    return () => {
+      window.removeEventListener('supabase:reset', handler)
+    }
+  }, [])
 
   const [agendaMonth, setAgendaMonth] = useState(() => {
     const now = new Date()
@@ -1713,8 +1725,9 @@ const WorkTimer = () => {
     if (workSessionsUnavailable) return
     if (workSessionEventsUnavailable) return
 
+    const client = supabase
     const sessionId = String(liveWorkSession.id)
-    const channel = supabase
+    const channel = client
       .channel(`work-session-events:${sessionId}`)
       .on(
         'postgres_changes',
@@ -1745,12 +1758,17 @@ const WorkTimer = () => {
 
     return () => {
       try {
-        supabase.removeChannel(channel)
+        channel.unsubscribe?.()
+      } catch {
+        // ignore
+      }
+      try {
+        client.removeChannel(channel)
       } catch {
         // ignore
       }
     }
-  }, [liveWorkSession?.id, workSessionsUnavailable, workSessionEventsUnavailable])
+  }, [liveWorkSession?.id, workSessionsUnavailable, workSessionEventsUnavailable, resetTick])
 
   useEffect(() => {
     // Staff (client/hiring) tab: load and subscribe work_sessions for all listed bookings.
@@ -2704,7 +2722,7 @@ const WorkTimer = () => {
     return () => {
       cancelled = true
     }
-  }, [jobId])
+  }, [jobId, user?.id])
 
   useEffect(() => {
     if (!bookingRaw) {
@@ -4367,6 +4385,11 @@ const WorkTimer = () => {
         throw new Error('Não foi possível confirmar o status concluído. Tente novamente.')
       }
 
+      const { error: releaseError } = await supabase.rpc("release_booking_payment", {
+        p_booking_id: bookingId,
+      })
+      if (releaseError) throw releaseError
+
       setBookingRaw((prev) => (prev ? { ...prev, ...r.data } : r.data))
 
       // UX: finalizar serviço completo deve sair do modal e voltar.
@@ -4746,21 +4769,27 @@ const WorkTimer = () => {
     if (!user?.id) return
     if (!hasRealWork) return
 
+    const client = supabase
     if (!bookingIdsKeyForRealtime) return
     const ids = bookingIdsKeyForRealtime.split('|').filter(Boolean)
     const topic = `bookings-live:${user.id}:${bookingIdsKeyForRealtime.slice(0, 64)}`
 
     // Ensure we don't keep old channels around.
-    const existing = supabase.getChannels?.().find((c) => c?.topic === `realtime:${topic}`)
+    const existing = client.getChannels?.().find((c) => c?.topic === `realtime:${topic}`)
     if (existing) {
       try {
-        supabase.removeChannel(existing)
+        existing.unsubscribe?.()
+      } catch {
+        // ignore
+      }
+      try {
+        client.removeChannel(existing)
       } catch {
         // ignore
       }
     }
 
-    const channel = supabase.channel(topic)
+    const channel = client.channel(topic)
     for (const id of ids) {
       channel.on(
         'postgres_changes',
@@ -4814,12 +4843,12 @@ const WorkTimer = () => {
         // ignore
       }
       try {
-        supabase.removeChannel(channel)
+        client.removeChannel(channel)
       } catch {
         // ignore
       }
     }
-  }, [user?.id, hasRealWork, bookingIdsKeyForRealtime])
+  }, [user?.id, hasRealWork, bookingIdsKeyForRealtime, resetTick])
 
   if (!jobDetails) {
     return (
@@ -6170,19 +6199,25 @@ const WorkTimer = () => {
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.5 }}
-      className="container mx-auto py-6 px-3 sm:px-4 max-w-lg"
+      className="w-full"
     >
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList className="rounded-2xl border border-border/60 bg-card/60 overflow-hidden border-b-0">
-          <TabsTrigger value="mine" className="py-2">
-            Prestando serviço
-          </TabsTrigger>
-          <TabsTrigger value="staff" className="py-2">
-            Contratando
-          </TabsTrigger>
-        </TabsList>
+        <JobyPageHeader
+          icon={<Timer size={23} className="text-primary-foreground" />}
+          title="Controle de Tempo"
+          subtitle="Acompanhe o tempo dos seus serviços e da sua equipe"
+        >
+          <TabsList className={tabsPillList}>
+            <TabsTrigger value="mine" className={tabsPillTrigger}>
+              Prestando serviço
+            </TabsTrigger>
+            <TabsTrigger value="staff" className={tabsPillTrigger}>
+              Contratando
+            </TabsTrigger>
+          </TabsList>
+        </JobyPageHeader>
 
-        <TabsContent value="mine" className="mt-5">
+        <TabsContent value="mine" className="mt-0">
           {(() => {
             if (
               !isProfessional ||

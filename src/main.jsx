@@ -19,6 +19,107 @@ const isNativeCapacitor = () => {
   }
 }
 
+const initResumeBus = () => {
+  try {
+    if (typeof window === 'undefined') return
+
+    // Avoid duplicate listeners in DEV/HMR.
+    if (window.__JOBY_RESUME_BUS__?.initialized === true) return
+
+    const RESUME_THROTTLE_MS = 900
+
+    window.__JOBY_RESUME_BUS__ = {
+      initialized: true,
+      lastEmitAt: 0,
+      throttleMs: RESUME_THROTTLE_MS,
+      capacitorHandle: null,
+    }
+
+    const canEmitNow = () => {
+      try {
+        if (typeof document === 'undefined') return true
+        const state = document.visibilityState
+        if (!state) return true
+        return state === 'visible'
+      } catch {
+        return true
+      }
+    }
+
+    const emitResume = (source, extraDetail) => {
+      try {
+        if (!canEmitNow()) return
+
+        const now = Date.now()
+        const bus = window.__JOBY_RESUME_BUS__
+        if (bus && typeof bus.lastEmitAt === 'number') {
+          if (now - bus.lastEmitAt < RESUME_THROTTLE_MS) return
+          bus.lastEmitAt = now
+        }
+
+        window.dispatchEvent(
+          new CustomEvent('joby:resume', {
+            detail: {
+              source: String(source || 'unknown'),
+              at: now,
+              ...(extraDetail && typeof extraDetail === 'object' ? extraDetail : null),
+            },
+          })
+        )
+      } catch {
+        // ignore
+      }
+    }
+
+    const onFocus = () => emitResume('focus')
+
+    const onPageShow = (event) => {
+      emitResume('pageshow', { persisted: Boolean(event?.persisted) })
+    }
+
+    const onVisibilityChange = () => {
+      try {
+        if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return
+      } catch {
+        // ignore
+      }
+      emitResume('visibilitychange')
+    }
+
+    window.addEventListener('focus', onFocus)
+    window.addEventListener('pageshow', onPageShow)
+    try {
+      document.addEventListener('visibilitychange', onVisibilityChange)
+    } catch {
+      // ignore
+    }
+
+    // Native (Capacitor): use App.appStateChange for reliable resume.
+    if (isNativeCapacitor()) {
+      import('@capacitor/app')
+        .then(({ App }) => {
+          try {
+            const bus = window.__JOBY_RESUME_BUS__
+            if (bus?.capacitorHandle) return
+
+            const handle = App.addListener('appStateChange', (state) => {
+              if (state?.isActive) emitResume('capacitor')
+            })
+
+            if (bus) bus.capacitorHandle = handle
+          } catch {
+            // ignore
+          }
+        })
+        .catch(() => {
+          // ignore
+        })
+    }
+  } catch {
+    // ignore
+  }
+}
+
 // PWA Service Worker:
 // - Em produção web, registramos normalmente.
 // - Em DEV, desregistramos (se existir) para não quebrar HMR nem servir cache/bundle antigo.
@@ -192,6 +293,8 @@ try {
 } catch {
   // ignore
 }
+
+initResumeBus()
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>

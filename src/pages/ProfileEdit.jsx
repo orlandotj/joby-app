@@ -4,6 +4,16 @@ import { motion } from 'framer-motion'
 import { Camera, Upload, X, Plus, Edit2, Trash2, Briefcase, MapPin } from 'lucide-react'
 import { useAuth } from '@/contexts/AuthContext'
 import { Button } from '@/components/ui/button'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
@@ -472,6 +482,8 @@ const ProfileEdit = () => {
   const [showServiceForm, setShowServiceForm] = useState(false)
   const [services, setServices] = useState([])
   const [editingService, setEditingService] = useState(null)
+  const [deleteServiceConfirmOpen, setDeleteServiceConfirmOpen] = useState(false)
+  const [deleteServiceConfirmId, setDeleteServiceConfirmId] = useState(null)
 
   const [accountLoadError, setAccountLoadError] = useState(null)
   const [accountRefreshing, setAccountRefreshing] = useState(false)
@@ -688,6 +700,12 @@ const ProfileEdit = () => {
     setShowServiceForm(true)
   }
 
+  const openDeleteServiceConfirm = (serviceId) => {
+    if (!serviceId) return
+    setDeleteServiceConfirmId(serviceId)
+    setDeleteServiceConfirmOpen(true)
+  }
+
   const handleSaveService = (serviceData) => {
     if (editingService) {
       setServices((prev) =>
@@ -722,9 +740,6 @@ const ProfileEdit = () => {
       return
     }
     if (!serviceId) return
-
-    const ok = window.confirm('Tem certeza que deseja excluir este serviço?')
-    if (!ok) return
 
     try {
       const { error } = await supabase
@@ -1478,7 +1493,7 @@ const ProfileEdit = () => {
                         type="button"
                         size="sm"
                         variant="ghost"
-                        onClick={() => handleDeleteService(service.id)}
+                        onClick={() => openDeleteServiceConfirm(service.id)}
                         className="text-destructive hover:text-destructive"
                       >
                         <Trash2 className="w-4 h-4" />
@@ -1684,6 +1699,38 @@ const ProfileEdit = () => {
             </motion.div>
           </div>
         )}
+
+        <AlertDialog
+          open={deleteServiceConfirmOpen}
+          onOpenChange={(open) => {
+            setDeleteServiceConfirmOpen(open)
+            if (!open) setDeleteServiceConfirmId(null)
+          }}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Excluir serviço?</AlertDialogTitle>
+              <AlertDialogDescription>
+                O serviço será removido do seu perfil. Você pode adicioná-lo novamente depois.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Voltar</AlertDialogCancel>
+              <AlertDialogAction
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                onClick={() => {
+                  const serviceId = deleteServiceConfirmId
+                  if (!serviceId) return
+                  setDeleteServiceConfirmOpen(false)
+                  setDeleteServiceConfirmId(null)
+                  handleDeleteService(serviceId)
+                }}
+              >
+                Excluir
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
       </PullToRefresh>
     </motion.div>

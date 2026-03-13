@@ -87,28 +87,18 @@
   /* When a full-screen overlay is open we hide the bottom nav.
      Also remove layout padding reserved for the bottom nav to avoid
      a white strip at the bottom on Android/WebView. */
-  body.joby-overlay-open,
-  html.joby-overlay-open {
+  body.joby-overlay-scroll-locked,
+  html.joby-overlay-scroll-locked {
     overscroll-behavior: contain;
     overflow: hidden;
     touch-action: none;
   }
 
-  body.joby-overlay-open .joby-bottom-nav,
-  html.joby-overlay-open .joby-bottom-nav {
-    display: none !important;
-  }
+  /* Nova regra: nunca esconder a bottom nav atrás de overlay. */
 
-  body.joby-overlay-open main > div {
-    padding-bottom: 0 !important;
-  }
-
-  body.joby-overlay-open .joby-content-shell {
-    padding-bottom: 0 !important;
-  }
-
-  body.joby-overlay-open .safeContainer {
-    padding-bottom: 0 !important;
+  body.joby-overlay-nav-dim .joby-bottom-nav,
+  html.joby-overlay-nav-dim .joby-bottom-nav {
+    pointer-events: none;
   }
 
   .leaflet-container {

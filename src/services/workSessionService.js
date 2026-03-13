@@ -597,8 +597,9 @@ export const subscribeToWorkSessionByBooking = ({ bookingId, onChange } = {}) =>
   const id = String(bookingId || '').trim()
   if (!id) return { unsubscribe: () => {} }
 
+  const client = supabase
   const topic = `work-sessions:${id}`
-  const channel = supabase.channel(topic)
+  const channel = client.channel(topic)
 
   const handler = (payload) => {
     const next = payload?.new || null
@@ -627,7 +628,7 @@ export const subscribeToWorkSessionByBooking = ({ bookingId, onChange } = {}) =>
         // ignore
       }
       try {
-        supabase.removeChannel(channel)
+        client.removeChannel(channel)
       } catch {
         // ignore
       }

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { commentApi } from '@/lib/commentApi'
 import { supabase } from '@/lib/supabaseClient'
 import { useCommentsMeta } from '@/contexts/CommentsMetaContext'
+import { useAuth } from '@/contexts/AuthContext'
 
 const sortCommentsTop = (list) => {
   return [...(list || [])].sort((a, b) => {
@@ -60,7 +61,7 @@ export const prefetchCommentsCount = async ({ contentId, contentType } = {}) => 
   }
 }
 
-export const prefetchComments = async ({ contentId, contentType, sort = 'new' } = {}) => {
+export const prefetchComments = async ({ contentId, contentType, sort = 'new', userId = null } = {}) => {
   try {
     if (!contentId || !contentType) return
     if (contentType !== 'video' && contentType !== 'photo') return
@@ -98,7 +99,7 @@ export const prefetchComments = async ({ contentId, contentType, sort = 'new' } 
     let countsById = new Map()
     if (features.likes && ids.length) {
       const [likedRes, countsRes] = await Promise.all([
-        commentApi.getLikedCommentIds(ids),
+        commentApi.getLikedCommentIds(ids, { userId }),
         commentApi.getCommentLikeCounts(ids),
       ])
       likedIds = likedRes?.data || []
@@ -135,6 +136,7 @@ export const useComments = ({ contentId, contentType, enabled }) => {
   const photoId = contentType === 'photo' ? contentId : null
 
   const commentsMeta = useCommentsMeta()
+  const { user: currentUser } = useAuth()
 
   const [features, setFeatures] = useState({ replies: false, likes: false })
 
@@ -192,7 +194,10 @@ export const useComments = ({ contentId, contentType, enabled }) => {
         const rows = data || []
         const ids = rows.map((c) => c.id).filter(Boolean)
 
-        const likedIdsPromise = features.likes && ids.length ? commentApi.getLikedCommentIds(ids) : null
+        const likedIdsPromise =
+          features.likes && ids.length
+            ? commentApi.getLikedCommentIds(ids, { userId: currentUser?.id || null })
+            : null
         const countsPromise = features.likes && ids.length ? commentApi.getCommentLikeCounts(ids) : null
         const totalPromise = !keepExisting ? commentApi.getTotalCommentsCount({ videoId, photoId }) : null
 
@@ -256,7 +261,7 @@ export const useComments = ({ contentId, contentType, enabled }) => {
         if (!silent) setLoading(false)
       }
     },
-    [cacheKey, contentId, contentType, enabled, features.likes, photoId, sort, videoId]
+    [cacheKey, contentId, contentType, currentUser?.id, enabled, features.likes, photoId, sort, videoId]
   )
 
   const loadMore = useCallback(async () => {
@@ -279,7 +284,10 @@ export const useComments = ({ contentId, contentType, enabled }) => {
       const rows = data || []
       const ids = rows.map((c) => c.id).filter(Boolean)
 
-      const likedIdsPromise = features.likes && ids.length ? commentApi.getLikedCommentIds(ids) : null
+      const likedIdsPromise =
+        features.likes && ids.length
+          ? commentApi.getLikedCommentIds(ids, { userId: currentUser?.id || null })
+          : null
       const countsPromise = features.likes && ids.length ? commentApi.getCommentLikeCounts(ids) : null
 
       let likedIds = []
@@ -320,7 +328,7 @@ export const useComments = ({ contentId, contentType, enabled }) => {
     } finally {
       setLoadingMore(false)
     }
-  }, [cacheKey, comments.length, enabled, features.likes, hasMore, loading, loadingMore, photoId, sort, totalCount, videoId])
+  }, [cacheKey, comments.length, currentUser?.id, enabled, features.likes, hasMore, loading, loadingMore, photoId, sort, totalCount, videoId])
 
   const postComment = useCallback(
     async ({ content, parentId = null }) => {
@@ -495,7 +503,7 @@ export const useComments = ({ contentId, contentType, enabled }) => {
         let likedIds = []
         let countsById = new Map()
         if (features.likes && ids.length) {
-          const likedRes = await commentApi.getLikedCommentIds(ids)
+          const likedRes = await commentApi.getLikedCommentIds(ids, { userId: currentUser?.id || null })
           likedIds = likedRes?.data || []
 
           const countsRes = await commentApi.getCommentLikeCounts(ids)
@@ -521,7 +529,7 @@ export const useComments = ({ contentId, contentType, enabled }) => {
         setRepliesLoading((prev) => ({ ...prev, [parentId]: false }))
       }
     },
-    [enabled, features.likes, features.replies, photoId, videoId]
+    [currentUser?.id, enabled, features.likes, features.replies, photoId, videoId]
   )
 
   const startRealtime = useCallback(() => {
@@ -579,7 +587,19 @@ export const useComments = ({ contentId, contentType, enabled }) => {
   const stopRealtime = useCallback(() => {
     const sub = subscriptionRef.current
     subscriptionRef.current = null
-    sub?.unsubscribe?.()
+    if (!sub) return
+
+    try {
+      Promise.resolve(sub?.unsubscribe?.()).catch(() => {})
+    } catch {
+      // ignore
+    }
+
+    try {
+      Promise.resolve(supabase?.removeChannel?.(sub)).catch(() => {})
+    } catch {
+      // ignore
+    }
   }, [])
 
   useEffect(() => {

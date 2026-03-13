@@ -286,17 +286,24 @@ export const commentApi = {
     return { error }
   },
 
-  async getLikedCommentIds(commentIds) {
+  async getLikedCommentIds(commentIds, { userId } = {}) {
     try {
-      const {
-        data: { user },
-      } = await safeGetUser()
-      if (!user) return { data: [], error: null }
+      const providedUserId = String(userId || '').trim()
+      let effectiveUserId = providedUserId
+
+      if (!effectiveUserId) {
+        const {
+          data: { user },
+        } = await safeGetUser()
+        effectiveUserId = String(user?.id || '').trim()
+      }
+
+      if (!effectiveUserId) return { data: [], error: null }
 
       const { data, error } = await supabase
         .from('comment_likes')
         .select('comment_id')
-        .eq('user_id', user.id)
+        .eq('user_id', effectiveUserId)
         .in('comment_id', commentIds)
 
       if (error) {

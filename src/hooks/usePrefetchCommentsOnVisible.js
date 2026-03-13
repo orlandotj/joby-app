@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { prefetchComments, prefetchCommentsCount } from '@/hooks/useComments'
 import { useCommentsMeta } from '@/contexts/CommentsMetaContext'
+import { useAuth } from '@/contexts/AuthContext'
 
 const runIdle = (fn) => {
   if (typeof window === 'undefined') return
@@ -28,6 +29,7 @@ export const usePrefetchCommentsOnVisible = ({
 } = {}) => {
   const hasTriggeredRef = useRef(false)
   const commentsMeta = useCommentsMeta()
+  const { user: currentUser } = useAuth()
 
   const runPrefetch = () => {
     ;(async () => {
@@ -38,7 +40,7 @@ export const usePrefetchCommentsOnVisible = ({
 
     // Warm the list in background for instant opening.
     runIdle(() => {
-      void prefetchComments({ contentId, contentType, sort })
+      void prefetchComments({ contentId, contentType, sort, userId: currentUser?.id || null })
     })
   }
 
@@ -77,5 +79,5 @@ export const usePrefetchCommentsOnVisible = ({
         // ignore
       }
     }
-  }, [commentsMeta, contentId, contentType, enabled, root, rootMargin, sort, targetRef, threshold])
+  }, [commentsMeta, contentId, contentType, currentUser?.id, enabled, root, rootMargin, sort, targetRef, threshold])
 }

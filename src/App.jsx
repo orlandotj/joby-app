@@ -34,6 +34,7 @@ const WorkRequests = lazy(() => import('@/pages/WorkRequests'))
 const ProfileEdit = lazy(() => import('@/pages/ProfileEdit'))
 const Settings = lazy(() => import('@/pages/Settings'))
 const DebugSupabase = lazy(() => import('@/pages/DebugSupabase'))
+const DebugResume = lazy(() => import('@/pages/DebugResume'))
 const TermsOfService = lazy(() => import('@/pages/TermsOfService'))
 const PrivacyPolicy = lazy(() => import('@/pages/PrivacyPolicy'))
 const ServiceConfirmation = lazy(() => import('@/pages/ServiceConfirmation'))
@@ -126,7 +127,12 @@ function App() {
                   <Routes>
                     <Route path="/login" element={<Login />} />
                     <Route path="/register" element={<Register />} />
-                    <Route path="/debug-supabase" element={<DebugSupabase />} />
+                    {import.meta.env.DEV ? (
+                      <Route path="/debug-supabase" element={<DebugSupabase />} />
+                    ) : null}
+                    {import.meta.env.DEV ? (
+                      <Route path="/debug-resume" element={<DebugResume />} />
+                    ) : null}
                     <Route path="/" element={<MainLayout />}>
                       <Route index element={<Feed />} />
                       <Route path="explore" element={<Explore />} />

@@ -3,11 +3,11 @@ import { safeGetUser, supabase } from '@/lib/supabaseClient'
 import { optimizeImageFile } from '@/lib/imageOptimize'
 import { normalizeImage, NormalizeImageError } from '@/services/imageNormalizeService'
 
-const getChannelByName = (channelName) => {
+const getChannelByName = (channelName, client = supabase) => {
   const expectedTopic = channelName.startsWith('realtime:')
     ? channelName
     : `realtime:${channelName}`
-  return supabase.getChannels().find((ch) => ch.topic === expectedTopic)
+  return client.getChannels().find((ch) => ch.topic === expectedTopic)
 }
 
 /**
@@ -595,14 +595,21 @@ export const deleteMessage = async (messageId) => {
  */
 export const subscribeToMessages = (currentUserId, otherUserId, callback) => {
   const channelName = `messages:${currentUserId}:${otherUserId}`
+  const client = supabase
 
   // Remover canal existente para evitar múltiplos subscribes
-  const existingChannel = getChannelByName(channelName)
+  const existingChannel = getChannelByName(channelName, client)
   if (existingChannel) {
-    supabase.removeChannel(existingChannel)
+    try {
+      // Best-effort: evita eventos ainda chegando após troca rápida.
+      existingChannel.unsubscribe?.()
+    } catch (_e) {
+      // ignore
+    }
+    client.removeChannel(existingChannel)
   }
 
-  const subscription = supabase.channel(channelName)
+  const subscription = client.channel(channelName)
 
   const isRelationshipMissing = (err) => {
     const msg = String(err?.message || '').toLowerCase()
@@ -712,19 +719,31 @@ export const subscribeToMessages = (currentUserId, otherUserId, callback) => {
   subscription.subscribe()
 
   return () => {
-    supabase.removeChannel(subscription)
+    try {
+      subscription.unsubscribe?.()
+    } catch (_e) {
+      // ignore
+    }
+    client.removeChannel(subscription)
   }
 }
 
 /**
  * Enviar sinal de que o usuário está digitando
  */
-export const sendTypingIndicator = async (receiverId) => {
+export const sendTypingIndicator = async (receiverId, { senderId } = {}) => {
   try {
-    const {
-      data: { user },
-    } = await safeGetUser()
-    if (!user) return
+    const providedSenderId = String(senderId || '').trim()
+    let effectiveSenderId = providedSenderId
+
+    if (!effectiveSenderId) {
+      const {
+        data: { user },
+      } = await safeGetUser()
+      effectiveSenderId = String(user?.id || '').trim()
+    }
+
+    if (!effectiveSenderId) return
 
     const channelName = `typing:${receiverId}`
 
@@ -737,7 +756,7 @@ export const sendTypingIndicator = async (receiverId) => {
     }
 
     await channel.track({
-      user_id: user.id,
+      user_id: effectiveSenderId,
       typing: true,
       timestamp: new Date().toISOString(),
     })
@@ -768,14 +787,15 @@ export const stopTypingIndicator = async (channel) => {
  */
 export const subscribeToTyping = (currentUserId, callback) => {
   const channelName = `typing:${currentUserId}`
+  const client = supabase
 
   // Remover canal existente para evitar múltiplos subscribes
-  const existingChannel = getChannelByName(channelName)
+  const existingChannel = getChannelByName(channelName, client)
   if (existingChannel) {
-    supabase.removeChannel(existingChannel)
+    client.removeChannel(existingChannel)
   }
 
-  const channel = supabase.channel(channelName)
+  const channel = client.channel(channelName)
 
   channel
     .on('presence', { event: 'sync' }, () => {
@@ -787,6 +807,6 @@ export const subscribeToTyping = (currentUserId, callback) => {
     .subscribe()
 
   return () => {
-    supabase.removeChannel(channel)
+    client.removeChannel(channel)
   }
 }

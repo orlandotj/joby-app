@@ -1,4 +1,4 @@
-import { supabase } from '@/lib/supabaseClient'
+import { safeGetSession, supabase } from '@/lib/supabaseClient'
 import { log } from '@/lib/logger'
 
 const WORKER_BASE_URL =
@@ -64,9 +64,13 @@ export async function normalizeImage({ file, context, target } = {}) {
     })
   }
 
-  const {
-    data: { session },
-  } = await supabase.auth.getSession()
+  let session = null
+  try {
+    const { data } = await safeGetSession(8000)
+    session = data?.session || null
+  } catch {
+    session = null
+  }
 
   const accessToken = session?.access_token
   if (!accessToken) {

@@ -6,8 +6,15 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { useAuth } from '@/contexts/AuthContext'
 import { useToast } from '@/components/ui/use-toast'
 import { MessageCircle, MoreVertical, X } from 'lucide-react'
+import {
+  bottomSheetContainerBase,
+  bottomSheetHandleBar,
+  bottomSheetHandleWrap,
+  sheetOverlayBlurDark,
+} from '@/design/sheetTokens'
 import { useComments } from '@/hooks/useComments'
 import { getProfileDisplayName } from '@/lib/profileDisplay'
+import { useOverlayLock } from '@/hooks/useOverlayLock'
 import { CommentComposer } from './CommentComposer'
 import { CommentItem } from './CommentItem'
 import { RepliesThread } from './RepliesThread'
@@ -31,6 +38,7 @@ const CommentSkeleton = () => {
 }
 
 export const CommentsSheet = ({ open, onOpenChange, contentId, contentType, onCountChange }) => {
+  useOverlayLock(!!open)
   const { user: currentUser } = useAuth()
   const { toast } = useToast()
 
@@ -229,7 +237,7 @@ export const CommentsSheet = ({ open, onOpenChange, contentId, contentType, onCo
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="fixed inset-0 z-[10000] bg-black/60 backdrop-blur-sm"
+                className={sheetOverlayBlurDark}
               />
             </DialogPrimitive.Overlay>
 
@@ -241,7 +249,7 @@ export const CommentsSheet = ({ open, onOpenChange, contentId, contentType, onCo
                 animate={{ y: 0 }}
                 exit={{ y: '100%' }}
                 transition={{ type: 'tween', duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-                className="fixed z-[10001] left-0 right-0 bottom-0 mx-auto w-full max-w-2xl bg-background rounded-t-2xl border border-border shadow-2xl flex flex-col"
+                className={`${bottomSheetContainerBase} flex flex-col`}
                 style={{
                   height: '78dvh',
                   // Don't move the whole sheet up (that makes the white panel jump).
@@ -256,12 +264,12 @@ export const CommentsSheet = ({ open, onOpenChange, contentId, contentType, onCo
                 <DialogPrimitive.Description className="sr-only">Lista de comentários e campo para comentar.</DialogPrimitive.Description>
 
                 {/* Handle */}
-                <div className="pt-2 flex justify-center">
-                  <div className="h-1 w-12 rounded-full bg-muted" />
+                <div className={bottomSheetHandleWrap}>
+                  <div className={bottomSheetHandleBar} />
                 </div>
 
                 {/* Header */}
-                <div className="px-4 py-3 border-b border-border flex items-center gap-2 flex-shrink-0">
+                <div className="px-4 py-3 border-b border-border/60 bg-background/95 backdrop-blur-sm supports-[backdrop-filter]:bg-background/70 flex items-center gap-2 flex-shrink-0">
                   <MessageCircle size={18} className="text-muted-foreground" />
                   <div className="flex-1">
                     <p className="font-semibold text-sm">{title}</p>
@@ -357,7 +365,7 @@ export const CommentsSheet = ({ open, onOpenChange, contentId, contentType, onCo
                 </div>
 
                 {/* Footer */}
-                <div className="px-4 py-4 border-t border-border bg-background flex-shrink-0">
+                <div className="px-4 py-4 border-t border-border/60 bg-background/95 backdrop-blur-sm supports-[backdrop-filter]:bg-background/70 flex-shrink-0">
                   {replyTo?.parentId && (
                     <div className="mb-2 flex items-center justify-between gap-2">
                       <p className="text-xs text-muted-foreground truncate">

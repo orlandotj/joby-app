@@ -333,11 +333,13 @@ export async function exploreSearch(rawTerm, { limits } = {}) {
   // Se estiver vazio, retornamos "destaques" (sem filtro) com limites menores
   const effectiveTerm = term
 
+  const empty = { data: [], error: null }
+
   const [profiles, services, videos, photos] = await Promise.all([
-    searchProfiles(effectiveTerm, { limit: l.profiles }),
-    searchServices(effectiveTerm, { limit: l.services }),
-    searchVideos(effectiveTerm, { limit: l.videos }),
-    searchPhotos(effectiveTerm, { limit: l.photos }),
+    l.profiles > 0 ? searchProfiles(effectiveTerm, { limit: l.profiles }) : empty,
+    l.services > 0 ? searchServices(effectiveTerm, { limit: l.services }) : empty,
+    l.videos > 0 ? searchVideos(effectiveTerm, { limit: l.videos }) : empty,
+    l.photos > 0 ? searchPhotos(effectiveTerm, { limit: l.photos }) : empty,
   ])
 
   const publications = [

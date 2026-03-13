@@ -3,8 +3,35 @@ import * as AlertDialogPrimitive from "@radix-ui/react-alert-dialog"
 
 import { cn } from "@/lib/utils"
 import { buttonVariants } from "@/components/ui/button"
+import { useOverlayLock } from '@/hooks/useOverlayLock'
+import { Z_ALERT_CONTENT, Z_ALERT_OVERLAY } from '@/design/overlayZIndexTokens'
 
-const AlertDialog = AlertDialogPrimitive.Root
+const AlertDialogRoot = ({ open, defaultOpen, onOpenChange, ...props }) => {
+  const [openState, setOpenState] = React.useState(!!(open ?? defaultOpen))
+
+  React.useEffect(() => {
+    if (open === undefined) return
+    setOpenState(!!open)
+  }, [open])
+
+  useOverlayLock(!!openState)
+
+  const handleOpenChange = (next) => {
+    setOpenState(!!next)
+    onOpenChange?.(next)
+  }
+
+  return (
+    <AlertDialogPrimitive.Root
+      open={open}
+      defaultOpen={defaultOpen}
+      onOpenChange={handleOpenChange}
+      {...props}
+    />
+  )
+}
+
+const AlertDialog = AlertDialogRoot
 
 const AlertDialogTrigger = AlertDialogPrimitive.Trigger
 
@@ -13,7 +40,7 @@ const AlertDialogPortal = AlertDialogPrimitive.Portal
 const AlertDialogOverlay = React.forwardRef(({ className, ...props }, ref) => (
   <AlertDialogPrimitive.Overlay
     className={cn(
-      "fixed inset-0 z-[11000] bg-black/40 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
+      `fixed inset-0 ${Z_ALERT_OVERLAY} bg-black/40 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0`,
       className
     )}
     {...props}
@@ -27,7 +54,7 @@ const AlertDialogContent = React.forwardRef(({ className, ...props }, ref) => (
     <AlertDialogPrimitive.Content
       ref={ref}
       className={cn(
-        "fixed left-[50%] top-[50%] z-[11001] grid w-[calc(100vw-1.5rem)] max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border border-border/60 bg-background p-6 shadow-2xl duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] rounded-3xl",
+        `fixed left-[50%] top-[50%] ${Z_ALERT_CONTENT} grid w-[calc(100vw-1.5rem)] max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border border-border/60 bg-background p-6 shadow-2xl duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] rounded-3xl`,
         className
       )}
       {...props} />

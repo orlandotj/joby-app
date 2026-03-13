@@ -1,7 +1,7 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
 import { AlertTriangle, Search, SlidersHorizontal } from 'lucide-react'
-import { useSearchParams } from 'react-router-dom'
+import { useLocation, useSearchParams } from 'react-router-dom'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -26,6 +26,9 @@ const Explore = () => {
   const { toast } = useToast()
   const likes = useLikes()
   const likesRef = useRef(likes)
+  const likesPrehydratedKeyRef = useRef('')
+  const likesPrehydratedUntilRef = useRef(0)
+  const location = useLocation()
   const [searchParams] = useSearchParams()
   const [searchTerm, setSearchTerm] = useState('')
   const debouncedSearchTerm = useDebounce(searchTerm, 400)
@@ -64,6 +67,26 @@ const Explore = () => {
   const [reelsFeedTerm, setReelsFeedTerm] = useState('')
 
   const requestSeq = useRef(0)
+  const softRevalidateSeqRef = useRef(0)
+
+  const lastRevalidateAtRef = useRef(0)
+  const lastSoftRevalidateNetworkErrorAtRef = useRef(0)
+
+  const isNetworkLikeError = useCallback((err) => {
+    try {
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) return true
+    } catch {
+      // ignore
+    }
+
+    const name = String(err?.name || '')
+    if (name === 'TimeoutError' || name === 'AbortError') return true
+
+    const msg = String(err?.message || err || '')
+    return /Failed to fetch|NetworkError|Network request failed|ERR_NAME_NOT_RESOLVED|ENOTFOUND|ECONNREFUSED|timeout/i.test(
+      msg
+    )
+  }, [])
 
   useEffect(() => {
     setAllPublicationsVisible(12)
@@ -238,6 +261,142 @@ const Explore = () => {
 
   const intent = useMemo(() => inferSearchIntent(debouncedSearchTerm), [debouncedSearchTerm])
 
+  const softRevalidate = useCallback(async () => {
+    // Only revalidate when Explore is the active route (keep-alive keeps it mounted).
+    const path = String(location?.pathname || '')
+    if (path !== '/explore' && !path.startsWith('/explore/')) return
+
+    // Prevent overlap with the main search effect (which already runs exploreSearch()).
+    if (loading) return
+
+    // Avoid competing with a "load more" burst.
+    if (loadingMorePublications) return
+
+    const TTL_MS = 30_000
+    const now = Date.now()
+    const NETWORK_ERROR_COOLDOWN_MS = 2500
+    if (now - (lastSoftRevalidateNetworkErrorAtRef.current || 0) < NETWORK_ERROR_COOLDOWN_MS) return
+    if (now - (lastRevalidateAtRef.current || 0) < TTL_MS) return
+
+    const seq = ++softRevalidateSeqRef.current
+    const term = String(debouncedSearchTerm || '').trim()
+    const isStale = () => seq !== softRevalidateSeqRef.current
+
+    const limits =
+      activeTab === 'all'
+        ? { profiles: 8, services: 8, videos: 12, photos: 12 }
+        : activeTab === 'people'
+          ? { profiles: 24, services: 0, videos: 0, photos: 0 }
+          : activeTab === 'services'
+            ? { profiles: 0, services: 24, videos: 0, photos: 0 }
+            : { profiles: 0, services: 0, videos: 18, photos: 18 }
+
+    try {
+      const res = await exploreSearch(term, { limits })
+      if (isStale()) return
+
+      lastRevalidateAtRef.current = Date.now()
+      lastSoftRevalidateNetworkErrorAtRef.current = 0
+
+      setProfiles(res.profiles || [])
+      setServices(res.services || [])
+      setPublications(res.publications || [])
+
+      const permissionErrors = [
+        res?.errors?.profiles,
+        res?.errors?.services,
+        res?.errors?.videos,
+        res?.errors?.photos,
+      ]
+        .filter(Boolean)
+        .filter(
+          (e) =>
+            String(e?.code || '') === '42501' ||
+            Number(e?.status || 0) === 403 ||
+            String(e?.message || '').toLowerCase().includes('permission denied')
+        )
+
+      if (permissionErrors.length > 0) {
+        setBlockedWarning(
+          'Alguns resultados podem estar indisponíveis por permissões (RLS) no Supabase. Faça login ou ajuste as políticas de leitura.'
+        )
+      } else {
+        setBlockedWarning('')
+      }
+    } catch (e) {
+      if (isStale()) return
+      if (isNetworkLikeError(e)) lastSoftRevalidateNetworkErrorAtRef.current = Date.now()
+      log.error('EXPLORE', 'soft revalidate error', e)
+    }
+  }, [
+    location?.pathname,
+    loading,
+    loadingMorePublications,
+    debouncedSearchTerm,
+    activeTab,
+    isNetworkLikeError,
+  ])
+
+  useEffect(() => {
+    const bypassTtlAndCooldown = () => {
+      lastRevalidateAtRef.current = 0
+      lastSoftRevalidateNetworkErrorAtRef.current = 0
+    }
+
+    const isExploreActiveNow = () => {
+      const p = String(location?.pathname || '')
+      return p === '/explore' || p.startsWith('/explore/')
+    }
+
+    const onFocus = () => {
+      if (!isExploreActiveNow()) return
+      bypassTtlAndCooldown()
+      void softRevalidate()
+    }
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        if (!isExploreActiveNow()) return
+        bypassTtlAndCooldown()
+        void softRevalidate()
+      }
+    }
+    const onOnline = () => {
+      if (!isExploreActiveNow()) return
+      bypassTtlAndCooldown()
+      void softRevalidate()
+    }
+    const onPageShow = () => {
+      if (!isExploreActiveNow()) return
+      bypassTtlAndCooldown()
+      void softRevalidate()
+    }
+
+    window.addEventListener('focus', onFocus)
+    document.addEventListener('visibilitychange', onVisibility)
+    window.addEventListener('online', onOnline)
+    window.addEventListener('pageshow', onPageShow)
+    return () => {
+      window.removeEventListener('focus', onFocus)
+      document.removeEventListener('visibilitychange', onVisibility)
+      window.removeEventListener('online', onOnline)
+      window.removeEventListener('pageshow', onPageShow)
+    }
+  }, [location?.pathname, softRevalidate])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const onAuthReady = () => {
+      const p = String(location?.pathname || '')
+      const isExploreActiveNow = p === '/explore' || p.startsWith('/explore/')
+      if (!isExploreActiveNow) return
+      lastRevalidateAtRef.current = 0
+      lastSoftRevalidateNetworkErrorAtRef.current = 0
+      void softRevalidate()
+    }
+    window.addEventListener('auth:ready', onAuthReady)
+    return () => window.removeEventListener('auth:ready', onAuthReady)
+  }, [location?.pathname, softRevalidate])
+
   const handleLoadMorePublications = async () => {
     if (activeTab !== 'all') return
     if (loadingMorePublications) return
@@ -285,6 +444,12 @@ const Explore = () => {
             videoIds.length ? hydrate('video', videoIds) : Promise.resolve(),
             photoIds.length ? hydrate('photo', photoIds) : Promise.resolve(),
           ])
+
+          // Mark as pre-hydrated so the publications effect doesn't do it again.
+          const vKey = [...videoIds].map(String).sort().join(',')
+          const pKey = [...photoIds].map(String).sort().join(',')
+          likesPrehydratedKeyRef.current = `${vKey}|${pKey}`
+          likesPrehydratedUntilRef.current = Date.now() + 10_000
         }
       } catch {
         // best-effort
@@ -293,6 +458,9 @@ const Explore = () => {
       if (seq !== requestSeq.current) return
       setPublications(res.publications || [])
       setAllPublicationsVisible(nextVisible)
+
+      lastRevalidateAtRef.current = Date.now()
+      lastSoftRevalidateNetworkErrorAtRef.current = 0
 
       const permissionErrors = [res?.errors?.profiles, res?.errors?.services, res?.errors?.videos, res?.errors?.photos]
         .filter(Boolean)
@@ -360,6 +528,12 @@ const Explore = () => {
               videoIds.length ? hydrate('video', videoIds) : Promise.resolve(),
               photoIds.length ? hydrate('photo', photoIds) : Promise.resolve(),
             ])
+
+            // Mark as pre-hydrated so the publications effect doesn't do it again.
+            const vKey = [...videoIds].map(String).sort().join(',')
+            const pKey = [...photoIds].map(String).sort().join(',')
+            likesPrehydratedKeyRef.current = `${vKey}|${pKey}`
+            likesPrehydratedUntilRef.current = Date.now() + 10_000
           }
         } catch {
           // best-effort
@@ -367,6 +541,9 @@ const Explore = () => {
 
         if (seq !== requestSeq.current) return
         setPublications(res.publications || [])
+
+        lastRevalidateAtRef.current = Date.now()
+        lastSoftRevalidateNetworkErrorAtRef.current = 0
 
         const permissionErrors = [res?.errors?.profiles, res?.errors?.services, res?.errors?.videos, res?.errors?.photos]
           .filter(Boolean)
@@ -406,6 +583,15 @@ const Explore = () => {
       if (isVideo) videoIds.push(id)
       else photoIds.push(id)
     }
+
+    const vKey = [...videoIds].map(String).sort().join(',')
+    const pKey = [...photoIds].map(String).sort().join(',')
+    const key = `${vKey}|${pKey}`
+
+    // If we already pre-hydrated for this exact set, skip duplicate hydration.
+    const skipKey = likesPrehydratedKeyRef.current
+    const skipUntil = Number(likesPrehydratedUntilRef.current || 0)
+    if (skipKey && key === skipKey && Date.now() < skipUntil) return
 
     if (videoIds.length) void likes.hydrateForIds('video', videoIds)
     if (photoIds.length) void likes.hydrateForIds('photo', photoIds)
