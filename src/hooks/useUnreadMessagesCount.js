@@ -1,21 +1,35 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
 
 export const useUnreadMessagesCount = (userId) => {
   const [count, setCount] = useState(0)
   const safeUserId = useMemo(() => (userId ? String(userId) : ''), [userId])
 
+  const inFlightRef = useRef(null)
+  const lastRefreshAtRef = useRef(0)
+  const scheduledRef = useRef({ timerId: null, promise: null })
+
   useEffect(() => {
     let isMounted = true
     let pollId = null
     let onChanged = null
+
+    // Prevent cross-user overlap (effect reruns with a different userId)
+    inFlightRef.current = null
+    lastRefreshAtRef.current = 0
+    try {
+      if (scheduledRef.current?.timerId) clearTimeout(scheduledRef.current.timerId)
+    } catch {
+      // ignore
+    }
+    scheduledRef.current = { timerId: null, promise: null }
 
     if (!safeUserId) {
       setCount(0)
       return
     }
 
-    const refresh = async () => {
+    const refreshImpl = async () => {
       try {
         // Preferência 0: RPC (mais compatível com RLS/esquemas diferentes)
         try {
@@ -66,10 +80,52 @@ export const useUnreadMessagesCount = (userId) => {
       }
     }
 
-    refresh()
+    const COOLDOWN_MS = 800
+
+    const requestRefresh = () => {
+      const inFlight = inFlightRef.current
+      if (inFlight) return inFlight
+
+      const now = Date.now()
+      const last = Number(lastRefreshAtRef.current || 0)
+      const elapsed = now - last
+      if (last && elapsed >= 0 && elapsed < COOLDOWN_MS) {
+        const existing = scheduledRef.current?.promise
+        if (existing) return existing
+
+        const waitMs = COOLDOWN_MS - elapsed
+        const scheduled = { timerId: null, promise: null }
+        const promise = new Promise((resolve) => {
+          try {
+            scheduled.timerId = setTimeout(() => {
+              scheduledRef.current = { timerId: null, promise: null }
+              Promise.resolve(requestRefresh()).finally(resolve)
+            }, waitMs)
+          } catch {
+            // If setTimeout fails, just resolve.
+            resolve()
+          }
+        })
+        scheduled.promise = promise
+        scheduledRef.current = scheduled
+        return promise
+      }
+
+      const p = Promise.resolve(refreshImpl())
+        .catch(() => {})
+        .finally(() => {
+          inFlightRef.current = null
+          lastRefreshAtRef.current = Date.now()
+        })
+
+      inFlightRef.current = p
+      return p
+    }
+
+    void requestRefresh()
 
     onChanged = () => {
-      refresh()
+      void requestRefresh()
     }
 
     try {
@@ -77,7 +133,7 @@ export const useUnreadMessagesCount = (userId) => {
     } catch (_e) {
       // ignore
     }
-    pollId = setInterval(refresh, 30_000)
+    pollId = setInterval(() => void requestRefresh(), 30_000)
 
     return () => {
       isMounted = false
@@ -87,6 +143,14 @@ export const useUnreadMessagesCount = (userId) => {
       } catch (_e) {
         // ignore
       }
+
+      try {
+        if (scheduledRef.current?.timerId) clearTimeout(scheduledRef.current.timerId)
+      } catch {
+        // ignore
+      }
+      scheduledRef.current = { timerId: null, promise: null }
+      inFlightRef.current = null
     }
   }, [safeUserId])
 

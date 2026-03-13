@@ -51,7 +51,7 @@ import { attemptPlayWithMuteFallback } from '@/lib/videoAudioPrefs'
 import { ensureUserPlaybackUnlockedOnFirstGesture } from '@/lib/videoPlaybackCoordinator'
 import { formatPriceUnit, normalizePriceUnit } from '@/lib/priceUnit'
 import { log } from '@/lib/logger'
-import { supabase } from '@/lib/supabaseClient'
+import { safeGetSession, supabase } from '@/lib/supabaseClient'
 import {
   addDays,
   addMonths,
@@ -1520,10 +1520,13 @@ const ServiceDetailsModal = ({
 
       if (!baseItems.length) return
 
-      const {
-        data: { session },
-      } = await supabase.auth.getSession()
-      const accessToken = session?.access_token
+      let accessToken = null
+      try {
+        const { data } = await safeGetSession(8000)
+        accessToken = data?.session?.access_token || null
+      } catch {
+        return
+      }
       if (!accessToken) return
 
       const runWithConcurrency = async (items, worker, concurrency = 4) => {
@@ -4161,7 +4164,7 @@ const ServiceDetailsModal = ({
             if (canUploadMedia) {
               const {
                 data: { session },
-              } = await withTimeout(supabase.auth.getSession(), 8000, 'validar sua sessão')
+              } = await withTimeout(safeGetSession(8000), 8000, 'validar sua sessão')
               const accessToken = session?.access_token
               if (!accessToken) {
                 throw new Error('Sessão inválida. Faça login novamente para enviar anexos.')
@@ -4415,7 +4418,7 @@ const ServiceDetailsModal = ({
           if (serviceRequestReady) {
             const {
               data: { session },
-            } = await withTimeout(supabase.auth.getSession(), 8000, 'validar sua sessão')
+            } = await withTimeout(safeGetSession(8000), 8000, 'validar sua sessão')
             const accessToken = session?.access_token
             if (!accessToken) {
               throw new Error('Sessão inválida. Faça login novamente para enviar anexos.')
