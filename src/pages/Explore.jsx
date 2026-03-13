@@ -5,6 +5,7 @@ import { useLocation, useSearchParams } from 'react-router-dom'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import JobyPageHeader from '@/components/JobyPageHeader'
 import LoadingSkeleton from '@/components/explore/LoadingSkeleton'
 import EmptyState from '@/components/explore/EmptyState'
 import { useDebounce } from '@/hooks/useDebounce'
@@ -19,6 +20,7 @@ import ContentViewModal from '@/components/ContentViewModal'
 import { exploreSearch, inferSearchIntent } from '@/services/exploreSearchService'
 import { useToast } from '@/components/ui/use-toast'
 import { useLikes } from '@/contexts/LikesContext'
+import { tabsPillList, tabsPillTrigger } from '@/design/tabTokens'
 import { cn } from '@/lib/utils'
 import { log } from '@/lib/logger'
 
@@ -35,6 +37,27 @@ const Explore = () => {
   const [activeTab, setActiveTab] = useState('all')
   const [loading, setLoading] = useState(false)
   const [filtersOpen, setFiltersOpen] = useState(false)
+
+  const mountedRef = useRef(true)
+  const loadMoreSeqRef = useRef(0)
+  const likesHydratedKeyRef = useRef('')
+
+  const beginLoading = useCallback(() => {
+    if (!mountedRef.current) return
+    setLoading(true)
+  }, [setLoading])
+
+  const endLoading = useCallback(() => {
+    if (!mountedRef.current) return
+    setLoading(false)
+  }, [setLoading])
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
 
   useEffect(() => {
     const tab = String(searchParams.get('tab') || '').trim().toLowerCase()
@@ -87,6 +110,7 @@ const Explore = () => {
       msg
     )
   }, [])
+
 
   useEffect(() => {
     setAllPublicationsVisible(12)
@@ -412,7 +436,8 @@ const Explore = () => {
 
     const nextPerType = Math.max(12, Math.ceil(nextVisible / 2))
 
-    const seq = ++requestSeq.current
+    const seq = ++loadMoreSeqRef.current
+    const isStale = () => seq !== loadMoreSeqRef.current
     setLoadingMorePublications(true)
 
     try {
@@ -420,7 +445,7 @@ const Explore = () => {
         limits: { profiles: 8, services: 8, videos: nextPerType, photos: nextPerType },
       })
 
-      if (seq !== requestSeq.current) return
+      if (isStale()) return
 
       setProfiles(res.profiles || [])
       setServices(res.services || [])
@@ -455,7 +480,7 @@ const Explore = () => {
         // best-effort
       }
 
-      if (seq !== requestSeq.current) return
+      if (isStale()) return
       setPublications(res.publications || [])
       setAllPublicationsVisible(nextVisible)
 
@@ -472,7 +497,7 @@ const Explore = () => {
         setBlockedWarning('')
       }
     } catch (e) {
-      if (seq !== requestSeq.current) return
+      if (isStale()) return
       log.error('EXPLORE', 'load more publications error', e)
       toast({
         title: 'Erro',
@@ -480,8 +505,7 @@ const Explore = () => {
         variant: 'destructive',
       })
     } finally {
-      if (seq !== requestSeq.current) return
-      setLoadingMorePublications(false)
+      if (mountedRef.current) setLoadingMorePublications(false)
     }
   }
 
@@ -489,7 +513,7 @@ const Explore = () => {
     const seq = ++requestSeq.current
     const term = String(debouncedSearchTerm || '').trim()
 
-    setLoading(true)
+    beginLoading()
 
     ;(async () => {
       try {
@@ -557,16 +581,17 @@ const Explore = () => {
       } catch (e) {
         if (seq !== requestSeq.current) return
         log.error('EXPLORE', 'search error', e)
-        setProfiles([])
-        setServices([])
-        setPublications([])
-        setBlockedWarning('')
+        if (!isNetworkLikeError(e)) {
+          setProfiles([])
+          setServices([])
+          setPublications([])
+          setBlockedWarning('')
+        }
       } finally {
-        if (seq !== requestSeq.current) return
-        setLoading(false)
+        endLoading()
       }
     })()
-  }, [debouncedSearchTerm, activeTab])
+  }, [debouncedSearchTerm, activeTab, beginLoading, endLoading, isNetworkLikeError])
 
   // Hydrate likes in batch for publications returned by search
   useEffect(() => {
@@ -593,6 +618,10 @@ const Explore = () => {
     const skipUntil = Number(likesPrehydratedUntilRef.current || 0)
     if (skipKey && key === skipKey && Date.now() < skipUntil) return
 
+    // Also avoid re-hydrating the same set repeatedly.
+    if (likesHydratedKeyRef.current === key) return
+    likesHydratedKeyRef.current = key
+
     if (videoIds.length) void likes.hydrateForIds('video', videoIds)
     if (photoIds.length) void likes.hydrateForIds('photo', photoIds)
   }, [likes, publications])
@@ -600,6 +629,9 @@ const Explore = () => {
   const handleSearch = (e) => {
     setSearchTerm(e.target.value)
   }
+
+  const hasAnyContent = (profiles || []).length > 0 || (services || []).length > 0 || (publications || []).length > 0
+  const showInitialSkeleton = loading && !hasAnyContent
 
   const openService = (service) => {
     const pro = service?.user || null
@@ -733,8 +765,34 @@ const Explore = () => {
       onTouchEndCapture={handleTouchHoverEndCapture}
       onTouchCancelCapture={handleTouchHoverEndCapture}
     >
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold mb-4 text-foreground">Explorar</h1>
+      <div className="mb-4">
+        <JobyPageHeader
+          icon={<Search size={23} className="text-primary-foreground" />}
+          title="Explorar o JOBY"
+          subtitle="Descubra profissionais, serviços e conteúdos"
+        >
+          <div className="rounded-3xl border border-border/60 bg-background/80 backdrop-blur-sm px-3 py-1 flex items-center gap-2 shadow-md ring-1 ring-black/5 focus-within:ring-primary/20">
+            <Search className="text-muted-foreground shrink-0" size={16} />
+            <Input
+              placeholder="Buscar pessoas, serviços e conteúdos..."
+              className={cn(
+                'h-9 flex-1 border-0 bg-transparent px-0 py-0 focus-visible:ring-0 focus-visible:ring-offset-0'
+              )}
+              value={searchTerm}
+              onChange={handleSearch}
+            />
+            <Button
+              type="button"
+              variant="secondary"
+              size="icon"
+              aria-label="Abrir filtros"
+              className="h-9 w-9 rounded-2xl shrink-0 shadow-sm"
+              onClick={() => setFiltersOpen(true)}
+            >
+              <SlidersHorizontal size={16} />
+            </Button>
+          </div>
+        </JobyPageHeader>
 
         {blockedWarning && (
           <div className="mb-4 rounded-lg border border-orange-500/30 bg-orange-500/10 px-3 py-2 text-sm text-foreground flex items-start gap-2">
@@ -743,52 +801,26 @@ const Explore = () => {
           </div>
         )}
 
-        <div className="relative mb-4">
-          <Search
-            className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground"
-            size={18}
-          />
-          <Input
-            placeholder="Buscar pessoas, serviços e publicações..."
-            className={cn('pl-10 pr-14 bg-card border-border/70 focus:border-primary')}
-            value={searchTerm}
-            onChange={handleSearch}
-          />
-
-          <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center">
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              aria-label="Abrir filtros"
-              className="h-9 w-9 rounded-full"
-              onClick={() => setFiltersOpen(true)}
-            >
-              <SlidersHorizontal size={18} />
-            </Button>
-          </div>
-        </div>
-
         <Tabs value={activeTab} onValueChange={setActiveTab}>
           <div className="w-full overflow-x-hidden">
-            <TabsList className="rounded-lg bg-card/60 backdrop-blur w-full justify-between">
-              <TabsTrigger value="all" className="min-w-0 px-2 text-xs sm:px-4 sm:text-sm truncate">
+            <TabsList className={tabsPillList}>
+              <TabsTrigger value="all" className={tabsPillTrigger}>
                 Tudo
               </TabsTrigger>
-              <TabsTrigger value="people" className="min-w-0 px-2 text-xs sm:px-4 sm:text-sm truncate">
+              <TabsTrigger value="people" className={tabsPillTrigger}>
                 Pessoas
               </TabsTrigger>
-              <TabsTrigger value="services" className="min-w-0 px-2 text-xs sm:px-4 sm:text-sm truncate">
+              <TabsTrigger value="services" className={tabsPillTrigger}>
                 Serviços
               </TabsTrigger>
-              <TabsTrigger value="posts" className="min-w-0 px-2 text-xs sm:px-4 sm:text-sm truncate">
+              <TabsTrigger value="posts" className={tabsPillTrigger}>
                 Publicações
               </TabsTrigger>
             </TabsList>
           </div>
 
           <TabsContent value="all" className="mt-4">
-            {loading ? (
+            {showInitialSkeleton ? (
               <LoadingSkeleton />
             ) : showEmpty ? (
               <EmptyState />
@@ -884,7 +916,7 @@ const Explore = () => {
           </TabsContent>
 
           <TabsContent value="people" className="mt-4">
-            {loading ? (
+            {showInitialSkeleton ? (
               <LoadingSkeleton />
             ) : profiles.length === 0 ? (
               <EmptyState />
@@ -894,7 +926,7 @@ const Explore = () => {
           </TabsContent>
 
           <TabsContent value="services" className="mt-4">
-            {loading ? (
+            {showInitialSkeleton ? (
               <LoadingSkeleton />
             ) : services.length === 0 ? (
               <EmptyState />
@@ -910,7 +942,7 @@ const Explore = () => {
           </TabsContent>
 
           <TabsContent value="posts" className="mt-4">
-            {loading ? (
+            {showInitialSkeleton ? (
               <LoadingSkeleton />
             ) : publications.length === 0 ? (
               <EmptyState />

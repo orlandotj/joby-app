@@ -4,6 +4,7 @@ node_modules/
 # Environment
 .env
 .env.local
+.dev.vars
 .env.*.local
 
 # Build output
