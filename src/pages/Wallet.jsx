@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
@@ -180,6 +180,14 @@ const Wallet = () => {
   const location = useLocation()
   const navigate = useNavigate()
 
+  // Wallet operations can be triggered by multiple paths (mount, refresh, retry, topup).
+  // This sequence ref enforces a latest-wins rule for UI commits.
+  const walletOpSeqRef = useRef(0)
+  const startWalletOp = useCallback(() => {
+    const seq = (walletOpSeqRef.current += 1)
+    return () => walletOpSeqRef.current !== seq
+  }, [])
+
   const [loading, setLoading] = useState(true)
   const [errorMessage, setErrorMessage] = useState('')
 
@@ -221,8 +229,10 @@ const Wallet = () => {
   }
 
   const refreshWallet = useCallback(async () => {
-    setErrorMessage('')
-    setInProgressError('')
+    const isStale = startWalletOp()
+
+    if (!isStale()) setErrorMessage('')
+    if (!isStale()) setInProgressError('')
 
     const summaryReq = supabase.rpc('get_wallet_summary')
     const statementReq = supabase.rpc('get_wallet_statement', { p_limit: 50 })
@@ -240,21 +250,25 @@ const Wallet = () => {
     if (summaryRes?.error) throw summaryRes.error
     if (statementRes?.error) throw statementRes.error
 
-    setSummary(normalizeWalletSummaryRow(summaryRes?.data))
-    setStatement(Array.isArray(statementRes?.data) ? statementRes.data : [])
+    if (isStale()) return
+
+    if (!isStale()) setSummary(normalizeWalletSummaryRow(summaryRes?.data))
+    if (!isStale()) setStatement(Array.isArray(statementRes?.data) ? statementRes.data : [])
 
     if (inProgressRes?.error) {
-      setInProgress([])
-      setInProgressError(
-        String(
-          inProgressRes.error?.message ||
-            'Falha ao carregar serviços em andamento.'
+      if (!isStale()) setInProgress([])
+      if (!isStale()) {
+        setInProgressError(
+          String(
+            inProgressRes.error?.message ||
+              'Falha ao carregar serviços em andamento.'
+          )
         )
-      )
+      }
     } else {
-      setInProgress(Array.isArray(inProgressRes?.data) ? inProgressRes.data : [])
+      if (!isStale()) setInProgress(Array.isArray(inProgressRes?.data) ? inProgressRes.data : [])
     }
-  }, [])
+  }, [startWalletOp])
 
   useEffect(() => {
     let cancelled = false

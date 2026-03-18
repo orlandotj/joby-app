@@ -1,7 +1,9 @@
 import { useEffect, useRef } from 'react'
 
-const OVERLAY_CLASS = 'joby-overlay-open'
+const OVERLAY_OPEN_CLASS = 'joby-overlay-open'
+const HIDE_NAV_CLASS = 'joby-overlay-hide-nav'
 let scrollLockCount = 0
+let hideNavCount = 0
 
 const canUseDom = () =>
   typeof window !== 'undefined' &&
@@ -9,41 +11,56 @@ const canUseDom = () =>
   !!document.body &&
   !!document.documentElement
 
-const setOverlayClass = (enabled) => {
+const setRootClass = (className, enabled) => {
   if (!canUseDom()) return
   const html = document.documentElement
   const body = document.body
 
   if (enabled) {
-    html.classList.add(OVERLAY_CLASS)
-    body.classList.add(OVERLAY_CLASS)
+    html.classList.add(className)
+    body.classList.add(className)
     return
   }
 
-  html.classList.remove(OVERLAY_CLASS)
-  body.classList.remove(OVERLAY_CLASS)
+  html.classList.remove(className)
+  body.classList.remove(className)
 }
+
+const setOverlayOpenClass = (enabled) => setRootClass(OVERLAY_OPEN_CLASS, enabled)
+const setHideNavClass = (enabled) => setRootClass(HIDE_NAV_CLASS, enabled)
 
 export const acquireOverlayLock = ({ lockScroll = true, navMode = 'dim' } = {}) => {
   if (!canUseDom()) return () => {}
 
-  // Mantém compatibilidade de assinatura, mas o comportamento visual pré-f432bbd
-  // dependia apenas de "overlay-open" quando o overlay trava scroll.
-  void navMode
+  const wantsScrollLock = !!lockScroll
+  const wantsHideNav = navMode === 'hide'
 
-  // Overlays que NÃO travam scroll não devem acionar o modo "full-screen overlay".
-  if (!lockScroll) return () => {}
+  if (!wantsScrollLock && !wantsHideNav) return () => {}
 
-  scrollLockCount += 1
-  if (scrollLockCount === 1) setOverlayClass(true)
+  if (wantsScrollLock) {
+    scrollLockCount += 1
+    if (scrollLockCount === 1) setOverlayOpenClass(true)
+  }
+
+  if (wantsHideNav) {
+    hideNavCount += 1
+    if (hideNavCount === 1) setHideNavClass(true)
+  }
 
   let released = false
   return () => {
     if (released) return
     released = true
 
-    scrollLockCount = Math.max(0, scrollLockCount - 1)
-    if (scrollLockCount === 0) setOverlayClass(false)
+    if (wantsScrollLock) {
+      scrollLockCount = Math.max(0, scrollLockCount - 1)
+      if (scrollLockCount === 0) setOverlayOpenClass(false)
+    }
+
+    if (wantsHideNav) {
+      hideNavCount = Math.max(0, hideNavCount - 1)
+      if (hideNavCount === 0) setHideNavClass(false)
+    }
   }
 }
 

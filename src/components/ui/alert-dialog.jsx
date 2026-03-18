@@ -14,7 +14,7 @@ const AlertDialogRoot = ({ open, defaultOpen, onOpenChange, ...props }) => {
     setOpenState(!!open)
   }, [open])
 
-  useOverlayLock(!!openState)
+  useOverlayLock(!!openState, { navMode: 'dim' })
 
   const handleOpenChange = (next) => {
     setOpenState(!!next)

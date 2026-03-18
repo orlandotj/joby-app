@@ -156,8 +156,8 @@ const Navigation = () => {
     if (typeof window === 'undefined') return
 
     const hasOverlay = () =>
-      document.documentElement.classList.contains('joby-overlay-open') ||
-      document.body.classList.contains('joby-overlay-open')
+      document.documentElement.classList.contains('joby-overlay-hide-nav') ||
+      document.body.classList.contains('joby-overlay-hide-nav')
 
     const update = () => {
       const next = hasOverlay()

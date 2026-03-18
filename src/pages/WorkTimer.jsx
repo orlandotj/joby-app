@@ -1930,7 +1930,8 @@ const WorkTimer = () => {
       } catch {
         // ignore
       } finally {
-        if (isMountedRef.current) setSessionLoading(false)
+        // Guard: do not let an outdated/cancelled request flip sessionLoading for a newer run.
+        if (!cancelled && isMountedRef.current) setSessionLoading(false)
       }
     })()
 
@@ -2588,6 +2589,9 @@ const WorkTimer = () => {
 
         setBookingRaw(bookingWithRequest)
 
+        // Guard: if the effect was invalidated during awaits, do not commit any more state.
+        if (cancelled) return
+
         // Ensure profiles when relationship failed
         let clientProfile = booking?.client || null
         let professionalProfile = booking?.professional || null
@@ -2618,6 +2622,9 @@ const WorkTimer = () => {
             .maybeSingle()
           if (!cancelled && !r?.error) service = r?.data || null
         }
+
+        // Guard: avoid committing derived details/payment state after invalidation.
+        if (cancelled) return
 
         const unitKey = normalizeUnitKey(service?.price_unit)
         const paymentTypeFromUnit =
@@ -2662,6 +2669,9 @@ const WorkTimer = () => {
           maximumWorkTime: 480,
           breakReminder: 240,
         }
+
+        // Guard: commits below must not run for a stale/cancelled loader.
+        if (cancelled) return
 
         setJobDetails(nextJobDetails)
         setPaymentType(nextJobDetails.paymentType)

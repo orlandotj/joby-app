@@ -172,6 +172,7 @@ const WorkRequests = () => {
   const latestRecebidosRef = useRef([])
   const latestEnviadosRef = useRef([])
   const loadRequestsInFlightRef = useRef(false)
+  const loadRequestsPendingRef = useRef(false)
   const lastAutoRefreshAtRef = useRef(0)
   const workSessionsUnavailableRef = useRef(false)
   const workSessionsFetchInFlightRef = useRef({})
@@ -1286,7 +1287,7 @@ const WorkRequests = () => {
   }, [])
 
   useEffect(() => {
-    if (user) {
+    if (user?.id) {
       const cached = readCache()
       if (cached) {
         setRequestsRecebidos(cached.recebidos)
@@ -1308,7 +1309,7 @@ const WorkRequests = () => {
     } else if (!authLoading) {
       setLoading(false)
     }
-  }, [user, authLoading])
+  }, [user?.id, authLoading])
 
   const loadRequests = async () => {
     if (!user?.id) {
@@ -1548,6 +1549,19 @@ const WorkRequests = () => {
       setLoadingRecebidos(false)
       setLoadingEnviados(false)
       loadRequestsInFlightRef.current = false
+
+      if (loadRequestsPendingRef.current) {
+        loadRequestsPendingRef.current = false
+        try {
+          if (typeof queueMicrotask === 'function') {
+            queueMicrotask(() => loadRequests())
+          } else {
+            Promise.resolve().then(() => loadRequests())
+          }
+        } catch {
+          // ignore
+        }
+      }
     }
   }
 
@@ -1566,8 +1580,11 @@ const WorkRequests = () => {
     }
 
     const triggerRefresh = () => {
+      if (loadRequestsInFlightRef.current) {
+        loadRequestsPendingRef.current = true
+        return
+      }
       if (!shouldTrigger()) return
-      if (loadRequestsInFlightRef.current) return
       loadRequests()
     }
 

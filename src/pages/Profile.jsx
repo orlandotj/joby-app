@@ -940,6 +940,8 @@ const Profile = () => {
           .limit(6),
       ])
 
+      if (isStale()) return
+
       // Calcular rating apenas se houver reviews
       if (reviewsResult.data && reviewsResult.data.length > 0) {
         const avgRating =

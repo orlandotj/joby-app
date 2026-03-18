@@ -529,8 +529,6 @@ const Explore = () => {
         })
 
         if (seq !== requestSeq.current) return
-        setProfiles(res.profiles || [])
-        setServices(res.services || [])
 
         // Avoid flashing wrong like counts: pre-hydrate like counts (RPC) for publications
         // before rendering the cards.
@@ -564,6 +562,9 @@ const Explore = () => {
         }
 
         if (seq !== requestSeq.current) return
+
+        setProfiles(res.profiles || [])
+        setServices(res.services || [])
         setPublications(res.publications || [])
 
         lastRevalidateAtRef.current = Date.now()
@@ -588,7 +589,7 @@ const Explore = () => {
           setBlockedWarning('')
         }
       } finally {
-        endLoading()
+        if (seq === requestSeq.current) endLoading()
       }
     })()
   }, [debouncedSearchTerm, activeTab, beginLoading, endLoading, isNetworkLikeError])

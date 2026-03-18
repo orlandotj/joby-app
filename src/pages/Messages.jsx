@@ -135,6 +135,8 @@ const Messages = () => {
   const openConversationLatestRef = useRef({ seq: 0, key: '' })
   const openConversationInFlightByKeyRef = useRef(new Map())
 
+  const loadConversationsSeqRef = useRef(0)
+
   const markReadDisabledRef = useRef(false)
   const markReadStateByKeyRef = useRef(new Map())
 
@@ -1081,10 +1083,9 @@ const Messages = () => {
   }, [user?.id])
 
   useEffect(() => {
-    if (user) {
-      loadConversations()
-    }
-  }, [user])
+    if (!user?.id) return
+    loadConversations()
+  }, [user?.id])
 
   // Inbox realtime: atualiza lista de conversas e, se estiver no chat aberto, adiciona a mensagem sem precisar recarregar.
   useEffect(() => {
@@ -1259,14 +1260,22 @@ const Messages = () => {
   }, [user?.id, resetTick])
 
   const loadConversations = async () => {
-    if (!user?.id) {
-      setLoadError('Sessão expirada. Faça login novamente.')
-      setConversations([])
-      setLoading(false)
+    const userId = user?.id
+    const seq = ++loadConversationsSeqRef.current
+    const isStale = () =>
+      loadConversationsSeqRef.current !== seq || user?.id !== userId
+
+    if (!userId) {
+      if (!isStale()) {
+        setLoadError('Sessão expirada. Faça login novamente.')
+        setConversations([])
+        setLoading(false)
+      }
       return
     }
+
     setLoading(true)
-    setLoadError(null)
+    if (!isStale()) setLoadError(null)
     try {
       // Buscar conversas do usuário (últimas mensagens com cada contato)
       const select = `
@@ -1282,7 +1291,7 @@ const Messages = () => {
       const res = await supabase
         .from('messages')
         .select(select)
-        .or(`sender_id.eq.${user.id},receiver_id.eq.${user.id}`)
+        .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`)
         .is('request_id', null)
         .order('created_at', { ascending: false })
 
@@ -1294,7 +1303,7 @@ const Messages = () => {
         const res2 = await supabase
           .from('messages')
           .select(select)
-          .or(`sender_id.eq.${user.id},receiver_id.eq.${user.id}`)
+          .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`)
           .order('created_at', { ascending: false })
 
         messagesData = res2?.data
@@ -1307,11 +1316,11 @@ const Messages = () => {
       const conversationsMap = new Map()
 
       messagesData?.forEach((msg) => {
-        const otherUser = msg.sender_id === user.id ? msg.receiver : msg.sender
+        const otherUser = msg.sender_id === userId ? msg.receiver : msg.sender
         const conversationId = otherUser?.id
         if (!conversationId) return
 
-        const unreadForMe = msg.receiver_id === user.id && !isMessageRead(msg)
+        const unreadForMe = msg.receiver_id === userId && !isMessageRead(msg)
 
         if (!conversationsMap.has(conversationId)) {
           conversationsMap.set(conversationId, {
@@ -1334,13 +1343,17 @@ const Messages = () => {
         }
       })
 
-      setConversations(Array.from(conversationsMap.values()))
+      if (!isStale()) {
+        setConversations(Array.from(conversationsMap.values()))
+      }
     } catch (error) {
       log.error('MESSAGES', 'Erro ao carregar conversas', error)
-      setLoadError(String(error?.message || error || 'Erro desconhecido.'))
-      setConversations([])
+      if (!isStale()) {
+        setLoadError(String(error?.message || error || 'Erro desconhecido.'))
+        setConversations([])
+      }
     } finally {
-      setLoading(false)
+      if (!isStale()) setLoading(false)
     }
   }
 

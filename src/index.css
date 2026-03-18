@@ -94,20 +94,20 @@
     touch-action: none;
   }
 
-  body.joby-overlay-open .joby-bottom-nav,
-  html.joby-overlay-open .joby-bottom-nav {
+  body.joby-overlay-hide-nav .joby-bottom-nav,
+  html.joby-overlay-hide-nav .joby-bottom-nav {
     display: none !important;
   }
 
-  body.joby-overlay-open main > div {
+  body.joby-overlay-hide-nav main > div {
     padding-bottom: 0 !important;
   }
 
-  body.joby-overlay-open .joby-content-shell {
+  body.joby-overlay-hide-nav .joby-content-shell {
     padding-bottom: 0 !important;
   }
 
-  body.joby-overlay-open .safeContainer {
+  body.joby-overlay-hide-nav .safeContainer {
     padding-bottom: 0 !important;
   }
 
