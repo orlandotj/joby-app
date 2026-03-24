@@ -21,6 +21,27 @@ VITE_CLOUDFLARE_WORKER_URL=http://localhost:8787
 VITE_CLOUDFLARE_WORKER_URL=https://joby-r2-videos.<account>.workers.dev
 ```
 
+## 🎥 Upload de Vídeo (Faststart / server na porta 8788)
+
+O upload de vídeo via Faststart roda no servidor local (porta **8788**) e usa um arquivo de ambiente próprio:
+
+- **Arquivo:** `server/.env` (separado do `.env` da raiz)
+- **Base:** copie `server/.env.example` → `server/.env`
+
+### CORS no desenvolvimento (403 rápido)
+
+Em desenvolvimento local, o upload pode exigir `CORS_ORIGINS` com os origins do app, por exemplo:
+
+- `http://localhost:5173` (e também 5174/5175 se o Vite mudar)
+- `http://127.0.0.1:5173` (e 5174/5175)
+- `http://SEU_IP:5173` (para testar no celular na LAN)
+
+Depois de mudar `server/.env`, reinicie o stack com:
+
+```bash
+npm run dev:reset
+```
+
 ## ⚠️ ATENÇÃO: Reiniciar Servidor
 
 **Após criar ou modificar o arquivo `.env`:**

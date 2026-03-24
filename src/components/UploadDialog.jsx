@@ -49,6 +49,91 @@ const UploadDialog = ({ isOpen, setIsOpen, uploadType, onUploadComplete }) => {
   const fileSelectOpIdRef = useRef(0)
   const { toast } = useToast()
 
+  const formatUploadError = useCallback((err) => {
+    const status = Number(err?.status)
+    const code = String(err?.code || err?.payload?.code || '')
+    const msg = String(err?.message || '')
+    const isDev = import.meta.env.DEV === true
+
+    if (status === 429 || code === 'RATE_LIMIT') {
+      return {
+        title: 'Muitas tentativas',
+        description:
+          msg || 'Você fez muitos uploads em pouco tempo. Aguarde um pouco e tente novamente.',
+      }
+    }
+
+    if (status === 401 || code === 'AUTH_REQUIRED' || code === 'AUTH_INVALID') {
+      return {
+        title: 'Sessão expirada',
+        description: 'Faça login novamente e tente de novo.',
+      }
+    }
+
+    if (code === 'CORS_NOT_ALLOWED') {
+      return {
+        title: 'Acesso bloqueado',
+        description: isDev
+          ? 'Esta origem não está autorizada a acessar o servidor de upload (CORS). Verifique CORS_ORIGINS no backend e a URL do app.'
+          : 'Não foi possível continuar a partir deste endereço. Tente novamente.',
+      }
+    }
+
+    if (code === 'AUTH_USER_MISMATCH') {
+      return {
+        title: 'Sessão inconsistente',
+        description:
+          'Sua sessão não corresponde ao usuário do upload. Faça logout/login e tente novamente.',
+      }
+    }
+
+    if (status === 403) {
+      return {
+        title: 'Acesso bloqueado',
+        description:
+          'O servidor bloqueou esta solicitação (403). Verifique sua sessão e tente novamente.',
+      }
+    }
+
+    if (code === 'VIDEO_RULES') {
+      return {
+        title: 'Vídeo fora do padrão',
+        description:
+          msg || 'O vídeo não atende às regras de duração/resolução. Ajuste e tente novamente.',
+      }
+    }
+
+    if (status === 413) {
+      return {
+        title: 'Arquivo muito grande',
+        description: 'O vídeo excede o tamanho máximo permitido. Se possível, reduza e tente novamente.',
+      }
+    }
+
+    if (code === 'NETWORK' || /erro de rede/i.test(msg)) {
+      return {
+        title: 'Falha de conexão',
+        description: isDev
+          ? msg
+          : 'Não foi possível conectar ao servidor de upload. Verifique sua conexão e tente novamente.',
+      }
+    }
+
+    if (/VITE_FASTSTART_API_URL|VARIÁVEL DE AMBIENTE FALTANDO/i.test(msg)) {
+      return {
+        title: 'Configuração de upload',
+        description: isDev
+          ? msg
+          : 'O upload não está disponível no momento. Tente novamente mais tarde.',
+      }
+    }
+
+    return {
+      title: 'Não foi possível enviar',
+      description: msg || 'Tente novamente em alguns instantes.',
+    }
+  }, [])
+
   const getUploadTrace = ({ userId = null, bookingId = null, fileNameOverride = null } = {}) => {
     const uploadId = String(uploadIdRef.current || '').trim() || null
     const fileName = String(fileNameOverride || file?.name || '').trim() || null
@@ -922,6 +1007,7 @@ const UploadDialog = ({ isOpen, setIsOpen, uploadType, onUploadComplete }) => {
       toast({
         title: 'Erro no upload',
         description: error.message || 'Não foi possível fazer o upload. Tente novamente.',
+        ...formatUploadError(error),
         variant: 'destructive',
       })
     }
