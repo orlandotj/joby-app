@@ -203,7 +203,10 @@ export async function uploadVideoFaststart({
   uploadType = null,
   videoType = 'short',
   onProgress = null,
+  onUploadDone = null,
   accessToken = null,
+  trimStartSeconds = null,
+  trimEndSeconds = null,
 }) {
   assertFaststartUrl();
 
@@ -242,10 +245,32 @@ export async function uploadVideoFaststart({
 
   formData.append('videoType', videoType);
 
+  // Optional: server-side trim (keeps server as the final gatekeeper)
+  const trimStart =
+    typeof trimStartSeconds === 'number'
+      ? trimStartSeconds
+      : typeof trimStartSeconds === 'string' && trimStartSeconds.trim() !== ''
+        ? Number(trimStartSeconds)
+        : NaN
+
+  const trimEnd =
+    typeof trimEndSeconds === 'number'
+      ? trimEndSeconds
+      : typeof trimEndSeconds === 'string' && trimEndSeconds.trim() !== ''
+        ? Number(trimEndSeconds)
+        : NaN
+
+  if (Number.isFinite(trimStart) && Number.isFinite(trimEnd) && trimStart < trimEnd) {
+    formData.append('trim_start_seconds', String(trimStart))
+    formData.append('trim_end_seconds', String(trimEnd))
+    formData.append('trimStartSeconds', String(trimStart))
+    formData.append('trimEndSeconds', String(trimEnd))
+  }
+
   const headers = accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined
 
   if (typeof onProgress === 'function') {
-    return await uploadWithXHR(uploadUrl, formData, onProgress, { headers });
+    return await uploadWithXHR(uploadUrl, formData, onProgress, { headers, onUploadDone });
   }
 
   const response = await fetch(uploadUrl, {
@@ -266,7 +291,11 @@ export async function uploadVideoFaststart({
     const msg =
       (json && (json.message || json.error)) ||
       `Erro ${response.status}${response.statusText ? `: ${response.statusText}` : ''}`;
-    throw new Error(msg);
+    const err = new Error(msg);
+    err.status = response.status;
+    err.code = json?.code || null;
+    err.payload = json ?? null;
+    throw err;
   }
 
   return json ?? { ok: true, raw: text };
@@ -275,9 +304,10 @@ export async function uploadVideoFaststart({
 /**
  * Upload via XHR com progresso real
  */
-function uploadWithXHR(url, formData, onProgress, { headers } = {}) {
+function uploadWithXHR(url, formData, onProgress, { headers, onUploadDone } = {}) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
+    let uploadDoneFired = false;
 
     xhr.upload.addEventListener('progress', (e) => {
       if (e.lengthComputable) {
@@ -285,6 +315,19 @@ function uploadWithXHR(url, formData, onProgress, { headers } = {}) {
         onProgress(percent);
       }
     });
+
+    // Fires when the request body finished uploading (before server finishes processing).
+    if (typeof onUploadDone === 'function') {
+      xhr.upload.addEventListener('loadend', () => {
+        if (uploadDoneFired) return;
+        uploadDoneFired = true;
+        try {
+          onUploadDone();
+        } catch {
+          // ignore
+        }
+      });
+    }
 
     xhr.addEventListener('load', () => {
       const status = xhr.status;
@@ -304,7 +347,11 @@ function uploadWithXHR(url, formData, onProgress, { headers } = {}) {
         const msg =
           (json && (json.message || json.error)) ||
           `Erro ${status}${xhr.statusText ? `: ${xhr.statusText}` : ''}`;
-        reject(new Error(msg));
+        const err = new Error(msg);
+        err.status = status;
+        err.code = json?.code || null;
+        err.payload = json ?? null;
+        reject(err);
       }
     });
 
@@ -314,7 +361,9 @@ function uploadWithXHR(url, formData, onProgress, { headers } = {}) {
       const hint = isApi
         ? 'Verifique se o servidor Faststart está rodando (porta 8788) e se o proxy do Vite para /api está ativo.'
         : 'Verifique sua conexão e CORS/URL do servidor.';
-      reject(new Error(`Erro de rede ao fazer upload. ${hint}`));
+      const err = new Error(`Erro de rede ao fazer upload. ${hint}`);
+      err.code = 'NETWORK';
+      reject(err);
     });
 
     xhr.addEventListener('abort', () => {
