@@ -363,7 +363,7 @@ const Profile = () => {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
   const [activeTab, setActiveTab] = useState('videos')
   const [isUploadDialogOpen, setIsUploadDialogOpen] = useState(false)
-  const [uploadType, setUploadType] = useState('') // 'photo', 'short-video', 'long-video'
+  const [uploadType, setUploadType] = useState('') // 'photo', 'video'
   const [isServiceFormOpen, setIsServiceFormOpen] = useState(false)
   const [isServiceDetailsOpen, setIsServiceDetailsOpen] = useState(false)
   const [selectedService, setSelectedService] = useState(null)
@@ -584,10 +584,18 @@ const Profile = () => {
     }
 
     const upload = params.get('upload')
-    if (upload && ['photo', 'short-video', 'long-video'].includes(upload)) {
-      if (!isUploadDialogOpen || uploadType !== upload) {
-        setUploadType(upload)
-        setIsUploadDialogOpen(true)
+    if (upload) {
+      const normalized =
+        upload === 'short-video' || upload === 'long-video' ? 'video' : upload
+
+      if (normalized && ['photo', 'video'].includes(normalized)) {
+        if (!isUploadDialogOpen || uploadType !== normalized) {
+          setUploadType(normalized)
+          setIsUploadDialogOpen(true)
+        }
+      } else if (isUploadDialogOpen) {
+        // Invalid upload param -> do NOT open dialog
+        setIsUploadDialogOpen(false)
       }
     } else if (isUploadDialogOpen) {
       setIsUploadDialogOpen(false)

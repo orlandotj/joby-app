@@ -34,6 +34,10 @@ import { createImageDerivatives } from '@/lib/imageDerivatives'
 
 const UploadDialog = ({ isOpen, setIsOpen, uploadType, onUploadComplete }) => {
   const [file, setFile] = useState(null)
+  const [videoAdjust, setVideoAdjust] = useState(null)
+  const [videoTrim, setVideoTrim] = useState(null) // { startSeconds, endSeconds, targetUploadType, originalDurationSeconds }
+  const [detectedVideoUploadType, setDetectedVideoUploadType] = useState(null) // 'short-video' | 'long-video'
+  const [isPreviewPlaying, setIsPreviewPlaying] = useState(false)
   const [photoDerivatives, setPhotoDerivatives] = useState(null)
   const [preview, setPreview] = useState(null)
   const [imageOptimizeNote, setImageOptimizeNote] = useState('')
@@ -181,14 +185,14 @@ const UploadDialog = ({ isOpen, setIsOpen, uploadType, onUploadComplete }) => {
 
   const getAcceptedFileTypes = () => {
     if (uploadType === 'photo') return 'image/*'
-    if (uploadType === 'short-video' || uploadType === 'long-video')
-      return 'video/mp4'
+    if (uploadType === 'video' || uploadType === 'short-video' || uploadType === 'long-video') return 'video/mp4'
     return ''
   }
 
   const getMaxSize = () => {
     // For images: do NOT block by size except extreme cases.
     if (uploadType === 'photo') return 30 * 1024 * 1024
+    if (uploadType === 'video') return 200 * 1024 * 1024
     if (uploadType === 'short-video') return 50 * 1024 * 1024
     if (uploadType === 'long-video') return 200 * 1024 * 1024
     return 0
@@ -234,8 +238,11 @@ const UploadDialog = ({ isOpen, setIsOpen, uploadType, onUploadComplete }) => {
   }
 
   const getVideoRules = (type) => {
-    if (type === 'short-video') return { minSeconds: 15, maxSeconds: 300, label: 'Vídeo curto' }
-    if (type === 'long-video') return { minSeconds: 180, maxSeconds: 5400, label: 'Vídeo longo' }
+    // Produto:
+    // - short-video: duração >= 15 && <= 180
+    // - long-video: duração > 180 && <= 600
+    if (type === 'short-video') return { minSeconds: 15, maxSeconds: 180, label: 'Vídeo curto' }
+    if (type === 'long-video') return { minSeconds: 180, minExclusive: true, maxSeconds: 600, label: 'Vídeo longo' }
     return null
   }
 
@@ -290,7 +297,7 @@ const UploadDialog = ({ isOpen, setIsOpen, uploadType, onUploadComplete }) => {
             ? 'fotos é 30MB'
             : uploadType === 'short-video'
             ? 'vídeos curtos é 50MB'
-            : 'vídeos longos é 200MB'
+            : 'vídeos é 200MB'
         }.`,
         variant: 'destructive',
       })
@@ -458,15 +465,13 @@ const UploadDialog = ({ isOpen, setIsOpen, uploadType, onUploadComplete }) => {
     }
 
     // JOBY rules (blocking): validate duration + resolution before accepting.
-    if (uploadType === 'short-video' || uploadType === 'long-video') {
-      const rules = getVideoRules(uploadType)
+    // For uploadType === 'video', infer short/long automatically.
+    if (uploadType === 'video' || uploadType === 'short-video' || uploadType === 'long-video') {
       try {
         const meta = await getVideoMeta(selectedFile)
 
         const durationSecRaw = meta?.duration
-        const durationSeconds = Number.isFinite(durationSecRaw)
-          ? Math.floor(durationSecRaw)
-          : NaN
+        const durationSeconds = Number.isFinite(durationSecRaw) ? Number(durationSecRaw) : NaN
 
         if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
           toast({
@@ -496,16 +501,49 @@ const UploadDialog = ({ isOpen, setIsOpen, uploadType, onUploadComplete }) => {
           return
         }
 
-        if (rules) {
-          if (durationSeconds < rules.minSeconds || durationSeconds > rules.maxSeconds) {
-            toast({
-              title: `${rules.label}: duração inválida`,
-              description: `Envie um vídeo entre ${rules.minSeconds}s e ${rules.maxSeconds}s. Seu vídeo tem ${durationSeconds}s.`,
-              variant: 'destructive',
-            })
-            return
-          }
+        // Decision logic:
+        // - never open adjust if < 15s
+        // - ALWAYS open adjust for any video selection
+        // - auto-pick target type by duration (short <=180, long >180)
+
+        if (durationSeconds < 15) {
+          toast({
+            title: 'Vídeo muito curto',
+            description: `Seu vídeo tem ${Math.floor(durationSeconds)}s. Escolha outro vídeo (mínimo 15s).`,
+            variant: 'destructive',
+          })
+          return
         }
+
+        const targetUploadType = durationSeconds > 180 ? 'long-video' : 'short-video'
+
+        if (uploadType === 'video') {
+          setDetectedVideoUploadType(targetUploadType)
+        }
+
+        const openAdjust = (targetUploadType) => {
+          const targetRules = getVideoRules(targetUploadType)
+          if (!targetRules) return
+
+          setFile(null)
+          setVideoTrim(null)
+
+          const startSeconds = 0
+          const endSeconds = Math.min(targetRules.maxSeconds, durationSeconds)
+
+          setVideoAdjust({
+            file: selectedFile,
+            durationSeconds,
+            originalUploadType: uploadType === 'video' ? targetUploadType : uploadType,
+            targetUploadType,
+            rules: targetRules,
+            startSeconds,
+            endSeconds,
+          })
+        }
+
+        openAdjust(targetUploadType)
+        return
       } catch (e) {
         toast({
           title: 'Vídeo inválido',
@@ -519,7 +557,7 @@ const UploadDialog = ({ isOpen, setIsOpen, uploadType, onUploadComplete }) => {
     setFile(fileToUse)
 
     // For videos, ensure preview exists.
-    if (!preview && (uploadType === 'short-video' || uploadType === 'long-video')) {
+    if (!preview && (uploadType === 'video' || uploadType === 'short-video' || uploadType === 'long-video')) {
       try {
         const videoPreviewUrl = createObjectUrlPreview(selectedFile, preview)
         if (videoPreviewUrl) setPreview(videoPreviewUrl)
@@ -836,19 +874,58 @@ const UploadDialog = ({ isOpen, setIsOpen, uploadType, onUploadComplete }) => {
         throw new Error('Sessão expirada. Faça login novamente.')
       }
 
+      const legacyVideoType =
+        uploadType === 'short-video' || uploadType === 'long-video' ? uploadType : null
+      const effectiveUploadType = videoTrim?.targetUploadType || detectedVideoUploadType || legacyVideoType
+      if ((uploadType === 'video' || legacyVideoType) && !effectiveUploadType) {
+        throw new Error('Não foi possível determinar o tipo do vídeo. Selecione o arquivo novamente.')
+      }
+
+      const trimStart = videoTrim?.startSeconds
+      const trimEnd = videoTrim?.endSeconds
+      const originalDuration = videoTrim?.originalDurationSeconds
+
+      const hasTrimValues = Number.isFinite(Number(trimStart)) && Number.isFinite(Number(trimEnd))
+      const hasOriginalDuration =
+        Number.isFinite(Number(originalDuration)) && Number(originalDuration) > 0
+
+      const isNoopTrim = (() => {
+        if (!hasTrimValues || !hasOriginalDuration) return false
+        const EPS = 0.05
+        const s = Number(trimStart)
+        const e = Number(trimEnd)
+        const od = Number(originalDuration)
+        if (!Number.isFinite(s) || !Number.isFinite(e) || !Number.isFinite(od)) return false
+        return Math.abs(s - 0) <= EPS && Math.abs(e - od) <= EPS
+      })()
+
+      const shouldSendTrim = hasTrimValues && !isNoopTrim
+
       const result = await uploadVideoFaststart({
         videoFile: file,
         userId: user.id,
         title: title.trim(),
         description: description.trim() || '',
-        uploadType,
-        videoType: uploadType === 'short-video' ? 'short' : 'long',
+        uploadType: effectiveUploadType,
+        videoType: effectiveUploadType === 'short-video' ? 'short' : 'long',
+        trimStartSeconds: shouldSendTrim ? Number(trimStart) : null,
+        trimEndSeconds: shouldSendTrim ? Number(trimEnd) : null,
         accessToken,
         onProgress: (percent) => {
           const mappedProgress = 30 + percent * 0.6 // 30% -> 90%
           setUploadProgress(Math.round(mappedProgress))
+          if (Number(percent) < 100) {
+            setUploadStatusTitle('Enviando vídeo...')
+          }
+        },
+        onUploadDone: () => {
+          // Request body finished uploading; backend may take time to process.
+          setUploadStatusTitle('Processando vídeo…')
+          startUploadProcessingTicker()
         },
       })
+
+      stopUploadProcessingTicker()
 
       try {
         if (import.meta.env.DEV) {
@@ -981,7 +1058,7 @@ const UploadDialog = ({ isOpen, setIsOpen, uploadType, onUploadComplete }) => {
 
       onUploadComplete?.({
         ...(insertedRow || {}),
-        type: uploadType,
+        type: effectiveUploadType,
         // 👇 isso é o que deve ir pra tabela / UI
         url: videoUrlKey,
         thumbnail_url: thumbnailUrl,
