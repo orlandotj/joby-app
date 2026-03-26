@@ -160,8 +160,8 @@ function normalizeUploadType({ uploadTypeRaw, videoTypeLegacy }) {
 }
 
 function getVideoRules(uploadType) {
-  if (uploadType === 'short-video') return { minSeconds: 15, maxSeconds: 300 }
-  if (uploadType === 'long-video') return { minSeconds: 180, maxSeconds: 5400 }
+  if (uploadType === 'short-video') return { minSeconds: 15, maxSeconds: 180 }
+  if (uploadType === 'long-video') return { minSeconds: 180, minExclusive: true, maxSeconds: 600 }
   return null
 }
 
@@ -209,6 +209,56 @@ function runFfmpegFaststart({ inputPath, outputPath, ffmpegPath }) {
     child.on('close', (code) => {
       if (code === 0) return resolve({ ok: true })
       reject(new Error(`ffmpeg failed (code ${code}): ${stderr || 'no stderr'}`))
+    })
+  })
+}
+
+function runFfmpegTrimToSegment({ inputPath, outputPath, ffmpegPath, startSeconds, endSeconds }) {
+  return new Promise((resolve, reject) => {
+    const start = Number(startSeconds)
+    const end = Number(endSeconds)
+    const duration = end - start
+
+    const args = [
+      '-y',
+      '-i',
+      inputPath,
+      '-ss',
+      String(start),
+      '-t',
+      String(duration),
+      '-c:v',
+      'libx264',
+      '-preset',
+      'fast',
+      '-crf',
+      '23',
+      '-pix_fmt',
+      'yuv420p',
+      '-movflags',
+      '+faststart',
+      '-c:a',
+      'aac',
+      '-b:a',
+      '128k',
+      outputPath,
+    ]
+
+    const child = spawn(ffmpegPath, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+    })
+
+    let stderr = ''
+    child.stderr.on('data', (d) => {
+      stderr += String(d)
+      if (stderr.length > 128_000) stderr = stderr.slice(-128_000)
+    })
+
+    child.on('error', (err) => reject(err))
+    child.on('close', (code) => {
+      if (code === 0) return resolve({ ok: true })
+      reject(new Error(`ffmpeg trim failed (code ${code}): ${stderr || 'no stderr'}`))
     })
   })
 }
@@ -439,6 +489,132 @@ function jsonError(res, status, error, extra = {}) {
   return res.status(status).json({ ok: false, error, ...extra })
 }
 
+function normalizeIp(raw) {
+  const s = String(raw || '').trim()
+  if (!s) return ''
+  // common local/dev form: "::ffff:127.0.0.1"
+  return s.startsWith('::ffff:') ? s.slice('::ffff:'.length) : s
+}
+
+function getClientIp(req) {
+  // Keep simple and safe by default; only trust XFF if explicitly enabled.
+  const trustProxy = String(process.env.TRUST_PROXY || '').trim() === '1'
+  if (trustProxy) {
+    const xff = String(req.headers['x-forwarded-for'] || '').trim()
+    if (xff) return normalizeIp(xff.split(',')[0])
+  }
+  return normalizeIp(req.socket?.remoteAddress)
+}
+
+function createFixedWindowLimiter({ windowMs, max }) {
+  const hits = new Map()
+  let lastCleanupAt = 0
+
+  function cleanup(now) {
+    if (now - lastCleanupAt < windowMs) return
+    lastCleanupAt = now
+    for (const [k, v] of hits) {
+      if (!v || now > v.resetAt) hits.delete(k)
+    }
+  }
+
+  function consume(key) {
+    const now = Date.now()
+    cleanup(now)
+
+    const k = String(key || '').trim()
+    if (!k) {
+      return {
+        allowed: true,
+        remaining: max,
+        resetAt: now + windowMs,
+        retryAfterMs: 0,
+        limit: max,
+        windowMs,
+      }
+    }
+
+    const cur = hits.get(k)
+    if (!cur || now > cur.resetAt) {
+      const next = { count: 1, resetAt: now + windowMs }
+      hits.set(k, next)
+      return {
+        allowed: true,
+        remaining: max - 1,
+        resetAt: next.resetAt,
+        retryAfterMs: 0,
+        limit: max,
+        windowMs,
+      }
+    }
+
+    cur.count += 1
+    const allowed = cur.count <= max
+    const remaining = Math.max(0, max - cur.count)
+    const retryAfterMs = Math.max(0, cur.resetAt - now)
+    return {
+      allowed,
+      remaining,
+      resetAt: cur.resetAt,
+      retryAfterMs,
+      limit: max,
+      windowMs,
+    }
+  }
+
+  return { consume }
+}
+
+function sendRateLimit(res, scope, r) {
+  const retryAfterSeconds = Math.max(1, Math.ceil((r.retryAfterMs || 0) / 1000))
+  res.setHeader('Retry-After', String(retryAfterSeconds))
+  res.setHeader('X-RateLimit-Limit', String(r.limit))
+  res.setHeader('X-RateLimit-Remaining', String(r.remaining))
+  res.setHeader('X-RateLimit-Reset', String(Math.floor(Number(r.resetAt || 0) / 1000)))
+
+  const message =
+    scope === 'user'
+      ? 'Muitos uploads em pouco tempo para este usuário. Tente novamente mais tarde.'
+      : scope === 'ip'
+        ? 'Muitas requisições em pouco tempo para este IP. Tente novamente mais tarde.'
+        : 'Servidor ocupado processando uploads. Tente novamente em instantes.'
+
+  return jsonError(res, 429, 'Too Many Requests', {
+    code: 'RATE_LIMIT',
+    message,
+    limit: {
+      scope,
+      max: r.limit,
+      windowMs: r.windowMs,
+      remaining: r.remaining,
+      resetAt: r.resetAt,
+      retryAfterSeconds,
+    },
+  })
+}
+
+function createSemaphore(max) {
+  const limit = Math.max(1, Number(max) || 1)
+  let inUse = 0
+  return {
+    tryAcquire() {
+      if (inUse >= limit) return null
+      inUse += 1
+      let released = false
+      return {
+        release() {
+          if (released) return
+          released = true
+          inUse = Math.max(0, inUse - 1)
+        },
+      }
+    },
+    getLimit() {
+      return limit
+    },
+  }
+}
+
 const app = express()
 
 app.use(
@@ -465,13 +641,54 @@ app.use(
   })
 )
 
-const corsOrigin = envString('CORS_ORIGIN', { defaultValue: '' })
+function parseCorsOrigins() {
+  const csv = envString('CORS_ORIGINS', { defaultValue: '' })
+  const legacy = envString('CORS_ORIGIN', { defaultValue: '' })
+
+  const list = []
+  for (const part of String(csv || '').split(',')) {
+    const v = String(part || '').trim()
+    if (v) list.push(v)
+  }
+  if (legacy) list.push(String(legacy).trim())
+
+  return new Set(list.filter(Boolean))
+}
+
+const allowedCorsOrigins = parseCorsOrigins()
+const isProd = String(process.env.NODE_ENV || '').toLowerCase() === 'production'
+
+if (isProd && allowedCorsOrigins.size === 0) {
+  throw new Error('Missing env: CORS_ORIGINS (required in production).')
+}
+
 app.use(
   cors({
-    origin: corsOrigin || true,
+    origin: (origin, cb) => {
+      // Non-browser requests (curl/server-to-server) typically have no Origin.
+      if (!origin) return cb(null, true)
+      if (allowedCorsOrigins.has(origin)) return cb(null, true)
+      return cb(new Error('CORS_NOT_ALLOWED'))
+    },
     credentials: false,
+    methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ['Authorization', 'Content-Type'],
+    optionsSuccessStatus: 204,
   })
 )
+
+// Convert CORS rejections into an explicit 403.
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  if (String(err?.message || '') === 'CORS_NOT_ALLOWED') {
+    return jsonError(res, 403, 'Forbidden', {
+      code: 'CORS_NOT_ALLOWED',
+      message: 'Origin not allowed by CORS.',
+      origin: String(req.headers?.origin || ''),
+    })
+  }
+  return next(err)
+})
 
 app.get('/health', (req, res) => {
   const uptimeSec = Number(process.uptime?.() || 0)
@@ -506,6 +723,16 @@ const maxVideoBytes = envInt('MAX_VIDEO_BYTES', {
   defaultValue: 200 * 1024 * 1024,
 })
 
+const uploadRlIpWindowMs = envInt('UPLOAD_RL_IP_WINDOW_MS', { defaultValue: 10 * 60 * 1000 })
+const uploadRlIpMax = envInt('UPLOAD_RL_IP_MAX', { defaultValue: 30 })
+const uploadRlUserWindowMs = envInt('UPLOAD_RL_USER_WINDOW_MS', { defaultValue: 10 * 60 * 1000 })
+const uploadRlUserMax = envInt('UPLOAD_RL_USER_MAX', { defaultValue: 6 })
+const uploadMaxConcurrentJobs = envInt('UPLOAD_MAX_CONCURRENT_JOBS', { defaultValue: 2 })
+
+const uploadIpLimiter = createFixedWindowLimiter({ windowMs: uploadRlIpWindowMs, max: uploadRlIpMax })
+const uploadUserLimiter = createFixedWindowLimiter({ windowMs: uploadRlUserWindowMs, max: uploadRlUserMax })
+const uploadJobs = createSemaphore(uploadMaxConcurrentJobs)
+
 const upload = multer({
   storage: multer.diskStorage({
     destination: (_req, _file, cb) => {
@@ -522,18 +749,86 @@ const upload = multer({
   },
 })
 
-app.post('/api/upload-video-faststart', upload.single('file'), async (req, res) => {
+function rateLimitUploadByIp(req, res, next) {
+  if (req.method === 'OPTIONS') return next()
+  const ip = getClientIp(req)
+  const r = uploadIpLimiter.consume(ip || 'unknown')
+  if (!r.allowed) return sendRateLimit(res, 'ip', r)
+  return next()
+}
+
+function requireBearerHeader(req, res, next) {
+  if (req.method === 'OPTIONS') return next()
+  const authHeader = String(req.headers?.authorization || '').trim()
+  const hasBearer = authHeader.toLowerCase().startsWith('bearer ')
+  const token = hasBearer ? authHeader.slice('bearer '.length).trim() : ''
+  if (!token) {
+    return jsonError(res, 401, 'Unauthorized', {
+      code: 'AUTH_REQUIRED',
+      message: 'Missing or invalid Authorization header (expected: Bearer <token>).',
+    })
+  }
+  // Avoid reparsing and keep handler simple.
+  req.jobyBearerToken = token
+  return next()
+}
+
+app.post('/api/upload-video-faststart', rateLimitUploadByIp, requireBearerHeader, upload.single('file'), async (req, res) => {
   const tmpInputPath = req.file?.path
   let tmpOutputPath = ''
   let tmpDownscaledPath = ''
+  let tmpTrimmedPath = ''
+  let jobPermit = null
 
   try {
+    // AUTHN/AUTHZ: never trust user_id from the body. Use the authenticated Supabase user.
+    const token = String(req.jobyBearerToken || '').trim()
+
+    if (!token) {
+      return jsonError(res, 401, 'Unauthorized', {
+        code: 'AUTH_REQUIRED',
+        message: 'Missing or invalid Authorization header (expected: Bearer <token>).',
+      })
+    }
+
+    // Supabase client uses service role to insert metadata.
+    // We also use it here to validate the user JWT via Auth.
+    const supabaseUrl = envString('SUPABASE_URL', { required: true })
+    const supabaseServiceRoleKey = envString('SUPABASE_SERVICE_ROLE_KEY', { required: true })
+
+    const supabase = createClient(supabaseUrl, supabaseServiceRoleKey, {
+      auth: { persistSession: false },
+    })
+
+    const { data: authData, error: authError } = await supabase.auth.getUser(token)
+    const authedUserId = String(authData?.user?.id || '').trim()
+    if (authError || !authedUserId || !isUuid(authedUserId)) {
+      return jsonError(res, 401, 'Unauthorized', {
+        code: 'AUTH_INVALID',
+        message: 'Invalid or expired token.',
+      })
+    }
+
+    // If client sends user_id, it must match the authenticated user.
+    const bodyUserId = String(req.body?.user_id ?? req.body?.userId ?? '').trim()
+    if (bodyUserId) {
+      if (!isUuid(bodyUserId)) return jsonError(res, 400, 'Invalid user_id')
+      if (bodyUserId !== authedUserId) {
+        return jsonError(res, 403, 'Forbidden', {
+          code: 'AUTH_USER_MISMATCH',
+          message: 'user_id does not match authenticated user.',
+        })
+      }
+    }
+
+    const userId = authedUserId
+
+  // Rate limit by authenticated user BEFORE ffprobe/ffmpeg/R2.
+  const userRl = uploadUserLimiter.consume(userId)
+  if (!userRl.allowed) return sendRateLimit(res, 'user', userRl)
+
     const file = req.file
     if (!file) return jsonError(res, 400, 'Missing file')
-
-    const userId = String(req.body?.user_id ?? req.body?.userId ?? '').trim()
-    if (!userId) return jsonError(res, 400, 'Missing user_id')
-    if (!isUuid(userId)) return jsonError(res, 400, 'Invalid user_id')
 
     const title = sanitizeText(req.body?.title, { maxLen: 120 })
     if (!title) return jsonError(res, 400, 'Missing title')
@@ -562,6 +857,18 @@ app.post('/api/upload-video-faststart', upload.single('file'), async (req, res) 
     const mime = String(file.mimetype || '').toLowerCase()
     if (mime !== 'video/mp4') {
       return jsonError(res, 400, 'Invalid mime type (expected video/mp4)', { mime })
+    }
+
+    // Concurrency guard to protect CPU/ffmpeg under load.
+    jobPermit = uploadJobs.tryAcquire()
+    if (!jobPermit) {
+      return sendRateLimit(res, 'server', {
+        retryAfterMs: 5_000,
+        remaining: 0,
+        resetAt: Date.now() + 5_000,
+        limit: uploadJobs.getLimit(),
+        windowMs: 5_000,
+      })
     }
 
     const userIdMasked = maskUserId(userId)
@@ -632,7 +939,7 @@ app.post('/api/upload-video-faststart', upload.single('file'), async (req, res) 
 
     const devLogs = String(process.env.NODE_ENV || '').toLowerCase() !== 'production'
 
-    let durationSeconds = meta?.duration != null ? Math.floor(Number(meta.duration)) : NaN
+    let durationSeconds = meta?.duration != null ? Number(meta.duration) : NaN
     let width = meta?.width != null ? Math.floor(Number(meta.width)) : NaN
     let height = meta?.height != null ? Math.floor(Number(meta.height)) : NaN
 
@@ -655,6 +962,68 @@ app.post('/api/upload-video-faststart', upload.single('file'), async (req, res) 
     const maxDim = Math.max(width, height)
     let effectiveInputPath = tmpInputPath
 
+    const trimStartRaw = String(req.body?.trim_start_seconds ?? req.body?.trimStartSeconds ?? '').trim()
+    const trimEndRaw = String(req.body?.trim_end_seconds ?? req.body?.trimEndSeconds ?? '').trim()
+
+    if (trimStartRaw && trimEndRaw) {
+      const startSeconds = Number(trimStartRaw)
+      const endSeconds = Number(trimEndRaw)
+
+      if (
+        !Number.isFinite(startSeconds) ||
+        !Number.isFinite(endSeconds) ||
+        startSeconds < 0 ||
+        endSeconds <= startSeconds
+      ) {
+        return jsonError(res, 400, 'Parâmetros de corte inválidos.', {
+          code: 'VIDEO_RULES',
+          details: { trim_start_seconds: trimStartRaw, trim_end_seconds: trimEndRaw },
+        })
+      }
+
+      const originalDuration = Number(meta?.duration)
+      if (Number.isFinite(originalDuration) && endSeconds > originalDuration + 0.25) {
+        return jsonError(res, 400, 'Parâmetros de corte fora do vídeo original.', {
+          code: 'VIDEO_RULES',
+          details: { originalDuration, startSeconds, endSeconds },
+        })
+      }
+
+      try {
+        const outName = `joby-trimmed-${crypto.randomUUID()}.mp4`
+        tmpTrimmedPath = path.join(os.tmpdir(), outName)
+        await runFfmpegTrimToSegment({
+          inputPath: effectiveInputPath,
+          outputPath: tmpTrimmedPath,
+          ffmpegPath,
+          startSeconds,
+          endSeconds,
+        })
+
+        effectiveInputPath = tmpTrimmedPath
+
+        const outTrim = await runFfprobe({ inputPath: effectiveInputPath, ffprobePath })
+        const metaTrim = parseFfprobeMeta(outTrim?.stdout || '')
+        durationSeconds = metaTrim?.duration != null ? Number(metaTrim.duration) : durationSeconds
+        width = metaTrim?.width != null ? Math.floor(Number(metaTrim.width)) : width
+        height = metaTrim?.height != null ? Math.floor(Number(metaTrim.height)) : height
+      } catch (e) {
+        const details = ffmpegSafeErrorDetails(e, ffmpegPath)
+
+        if (details.kind === 'ffmpeg_not_found') {
+          return jsonError(res, 500, 'ffmpeg não está disponível no servidor.', {
+            code: 'FFMPEG_MISSING',
+            details: { message: 'ffmpeg is required to trim videos.' },
+          })
+        }
+
+        return jsonError(res, 500, 'Falha ao cortar o vídeo.', {
+          code: 'VIDEO_TRIM_FAILED',
+          details: { message: String(e?.message || e) },
+        })
+      }
+    }
+
     if (devLogs) {
       req.log.info(
         { tag: 'VIDEO', action: 'original_resolution', userIdMasked, width, height, durationSeconds },
@@ -675,7 +1044,7 @@ app.post('/api/upload-video-faststart', upload.single('file'), async (req, res) 
         tmpDownscaledPath = path.join(os.tmpdir(), outName)
 
         await runFfmpegDownscaleTo1080p({
-          inputPath: tmpInputPath,
+          inputPath: effectiveInputPath,
           outputPath: tmpDownscaledPath,
           ffmpegPath,
         })
@@ -686,7 +1055,7 @@ app.post('/api/upload-video-faststart', upload.single('file'), async (req, res) 
         const out2 = await runFfprobe({ inputPath: effectiveInputPath, ffprobePath })
         const meta2 = parseFfprobeMeta(out2?.stdout || '')
 
-        durationSeconds = meta2?.duration != null ? Math.floor(Number(meta2.duration)) : durationSeconds
+        durationSeconds = meta2?.duration != null ? Number(meta2.duration) : durationSeconds
         width = meta2?.width != null ? Math.floor(Number(meta2.width)) : width
         height = meta2?.height != null ? Math.floor(Number(meta2.height)) : height
 
@@ -744,7 +1113,10 @@ app.post('/api/upload-video-faststart', upload.single('file'), async (req, res) 
       })
     }
 
-    if (durationSeconds < rules.minSeconds || durationSeconds > rules.maxSeconds) {
+    const minOk = rules.minExclusive
+      ? durationSeconds > rules.minSeconds
+      : durationSeconds >= rules.minSeconds
+    if (!minOk || durationSeconds > rules.maxSeconds) {
       return jsonError(res, 400, 'Duração fora do permitido para este tipo de vídeo.', {
         code: 'VIDEO_RULES',
         details: {
@@ -756,6 +1128,8 @@ app.post('/api/upload-video-faststart', upload.single('file'), async (req, res) 
         },
       })
     }
+
+    const durationSecondsDb = Math.floor(durationSeconds)
 
     // Try faststart remux (no side effects)
     let optimized = true
@@ -840,9 +1214,6 @@ app.post('/api/upload-video-faststart', upload.single('file'), async (req, res) 
     const r2SecretAccessKey = envString('R2_SECRET_ACCESS_KEY', { required: true })
     const r2Endpoint = envString('R2_ENDPOINT', { required: true })
     const r2Bucket = envString('R2_BUCKET_NAME', { required: true })
-
-    const supabaseUrl = envString('SUPABASE_URL', { required: true })
-    const supabaseServiceRoleKey = envString('SUPABASE_SERVICE_ROLE_KEY', { required: true })
 
     const workerBaseUrl = envString('WORKER_BASE_URL', { defaultValue: '' }).replace(/\/+$/, '')
 
@@ -951,10 +1322,6 @@ app.post('/api/upload-video-faststart', upload.single('file'), async (req, res) 
       })
     }
 
-    const supabase = createClient(supabaseUrl, supabaseServiceRoleKey, {
-      auth: { persistSession: false },
-    })
-
     // Insert only fields required by the current schema.
     const row = {
       user_id: userId,
@@ -964,11 +1331,11 @@ app.post('/api/upload-video-faststart', upload.single('file'), async (req, res) 
       provider: 'cloudflare_r2',
       upload_type: uploadType,
       video_type: videoType,
-      duration_seconds: durationSeconds,
+      duration_seconds: durationSecondsDb,
       width,
       height,
       // Legacy compatibility
-      duration: durationSeconds,
+      duration: durationSecondsDb,
     }
 
     const { data, error } = await supabase.from('videos').insert([row]).select()
@@ -1024,7 +1391,17 @@ app.post('/api/upload-video-faststart', upload.single('file'), async (req, res) 
     return jsonError(res, 500, 'Internal server error', { message: msg })
   } finally {
     try {
+      if (jobPermit) jobPermit.release()
+    } catch {
+      // ignore
+    }
+    try {
       if (tmpInputPath) await fsp.unlink(tmpInputPath)
+    } catch {
+      // ignore
+    }
+    try {
+      if (tmpTrimmedPath) await fsp.unlink(tmpTrimmedPath)
     } catch {
       // ignore
     }
