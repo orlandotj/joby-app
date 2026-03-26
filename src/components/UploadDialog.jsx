@@ -1,4 +1,5 @@
-import React, { useState, useCallback, useRef } from 'react'
+import React, { useState, useCallback, useEffect, useRef } from 'react'
+import * as SliderPrimitive from '@radix-ui/react-slider'
 import {
   Dialog,
   DialogContent,
@@ -13,10 +14,17 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import {
   UploadCloud,
+  Inbox,
+  Camera,
   Image as ImageIcon,
   Video as VideoIcon,
   Loader2,
   FileCheck,
+  Scissors,
+  Clapperboard,
+  Wand2,
+  ArrowLeft,
+  Pause,
 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -47,9 +55,15 @@ const UploadDialog = ({ isOpen, setIsOpen, uploadType, onUploadComplete }) => {
   const [isUploading, setIsUploading] = useState(false)
   const [isConvertingHeic, setIsConvertingHeic] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
+  const [uploadStatusTitle, setUploadStatusTitle] = useState('')
   const [uploadSuccess, setUploadSuccess] = useState(false)
   const fileInputRef = useRef(null)
+  const cameraInputRef = useRef(null)
+  const videoPreviewRef = useRef(null)
+  const videoSeekGuardRef = useRef(false)
   const uploadIdRef = useRef('')
+  const uploadProcessingIntervalRef = useRef(null)
+  const uploadProcessingStartedAtRef = useRef(0)
   const fileSelectOpIdRef = useRef(0)
   const { toast } = useToast()
 
@@ -138,6 +152,35 @@ const UploadDialog = ({ isOpen, setIsOpen, uploadType, onUploadComplete }) => {
     }
   }, [])
 
+  const clearSelectedFile = useCallback(() => {
+    try {
+      fileSelectOpIdRef.current = (Number(fileSelectOpIdRef.current) || 0) + 1
+    } catch {
+      // ignore
+    }
+    setIsConvertingHeic(false)
+    setVideoAdjust(null)
+    setVideoTrim(null)
+    setDetectedVideoUploadType(null)
+    setPreview((prev) => {
+      revokeObjectUrlIfNeeded(prev)
+      return null
+    })
+    setFile(null)
+    setPhotoDerivatives(null)
+    setImageOptimizeNote('')
+    try {
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    } catch {
+      // ignore
+    }
+    try {
+      if (cameraInputRef.current) cameraInputRef.current.value = ''
+    } catch {
+      // ignore
+    }
+  }, [])
+
   const getUploadTrace = ({ userId = null, bookingId = null, fileNameOverride = null } = {}) => {
     const uploadId = String(uploadIdRef.current || '').trim() || null
     const fileName = String(fileNameOverride || file?.name || '').trim() || null
@@ -159,6 +202,9 @@ const UploadDialog = ({ isOpen, setIsOpen, uploadType, onUploadComplete }) => {
       // ignore
     }
     setFile(null)
+    setVideoAdjust(null)
+    setVideoTrim(null)
+    setDetectedVideoUploadType(null)
     setPhotoDerivatives(null)
     setPreview((prev) => {
       revokeObjectUrlIfNeeded(prev)
@@ -169,13 +215,60 @@ const UploadDialog = ({ isOpen, setIsOpen, uploadType, onUploadComplete }) => {
     setDescription('')
     setTags('')
     setUploadProgress(0)
+    setUploadStatusTitle('')
     setUploadSuccess(false)
     setIsConvertingHeic(false)
     uploadIdRef.current = ''
     if (fileInputRef.current) {
       fileInputRef.current.value = ''
     }
+    if (cameraInputRef.current) {
+      cameraInputRef.current.value = ''
+    }
   }, [])
+
+  const stopUploadProcessingTicker = useCallback(() => {
+    try {
+      if (uploadProcessingIntervalRef.current) {
+        clearInterval(uploadProcessingIntervalRef.current)
+      }
+    } catch {
+      // ignore
+    }
+    uploadProcessingIntervalRef.current = null
+    uploadProcessingStartedAtRef.current = 0
+  }, [])
+
+  const startUploadProcessingTicker = useCallback(() => {
+    stopUploadProcessingTicker()
+    uploadProcessingStartedAtRef.current = Date.now()
+
+    uploadProcessingIntervalRef.current = setInterval(() => {
+      const startedAt = Number(uploadProcessingStartedAtRef.current) || Date.now()
+      const elapsedMs = Math.max(0, Date.now() - startedAt)
+
+      // Rotate copy to reassure user during backend processing.
+      if (elapsedMs < 6000) setUploadStatusTitle('Processando vídeo...')
+      else if (elapsedMs < 14000) setUploadStatusTitle('Preparando publicação...')
+      else setUploadStatusTitle('Finalizando upload...')
+
+      // Gentle, bounded smoothing: never jump past 94% before backend responds.
+      setUploadProgress((prev) => {
+        const current = Number(prev) || 0
+        const floor = Math.max(90, current)
+        const cap = 94
+        const p = Math.min(1, elapsedMs / 12000) // ~12s to reach cap
+        const target = Math.min(cap, 90 + Math.floor(p * (cap - 90)))
+        return Math.max(floor, target)
+      })
+    }, 900)
+  }, [stopUploadProcessingTicker])
+
+  useEffect(() => {
+    return () => {
+      stopUploadProcessingTicker()
+    }
+  }, [stopUploadProcessingTicker])
 
   const handleClose = () => {
     if (isUploading) return
@@ -264,8 +357,14 @@ const UploadDialog = ({ isOpen, setIsOpen, uploadType, onUploadComplete }) => {
     const selectedFile = event.target.files[0]
     if (!selectedFile) return
 
+    const inputSource = String(event?.target?.dataset?.source || '').toLowerCase()
+    const cameFromCamera = inputSource === 'camera'
+
     setImageOptimizeNote('')
     setPhotoDerivatives(null)
+    setVideoAdjust(null)
+    setVideoTrim(null)
+    setDetectedVideoUploadType(null)
 
     // New correlation id for this upload attempt.
     try {
@@ -276,12 +375,14 @@ const UploadDialog = ({ isOpen, setIsOpen, uploadType, onUploadComplete }) => {
 
     // Backend (Node) currently accepts only MP4.
     if (
-      (uploadType === 'short-video' || uploadType === 'long-video') &&
+      (uploadType === 'video' || uploadType === 'short-video' || uploadType === 'long-video') &&
       selectedFile.type !== 'video/mp4'
     ) {
       toast({
         title: 'Formato inválido',
-        description: 'Envie apenas vídeos em MP4.',
+        description: cameFromCamera
+          ? 'Seu dispositivo gravou em um formato ainda não suportado pelo JOBY. Tente selecionar um vídeo da galeria/arquivo (MP4).'
+          : 'Envie apenas vídeos em MP4.',
         variant: 'destructive',
       })
       return
@@ -588,6 +689,7 @@ const UploadDialog = ({ isOpen, setIsOpen, uploadType, onUploadComplete }) => {
 
     setIsUploading(true)
     setUploadProgress(10)
+    setUploadStatusTitle(uploadType === 'photo' ? 'Enviando foto…' : 'Enviando vídeo…')
 
     try {
       try {
@@ -852,6 +954,7 @@ const UploadDialog = ({ isOpen, setIsOpen, uploadType, onUploadComplete }) => {
       })()
 
       setUploadProgress(30)
+      setUploadStatusTitle('Enviando vídeo…')
       try {
         if (import.meta.env.DEV) {
           log.debug('UPLOAD', 'video_faststart_begin', {
@@ -945,6 +1048,7 @@ const UploadDialog = ({ isOpen, setIsOpen, uploadType, onUploadComplete }) => {
       }
 
       setUploadProgress(95)
+      setUploadStatusTitle('Preparando publicação...')
 
       // Worker já inseriu no Supabase — pegar o row retornado
       const insertedRow = Array.isArray(result?.inserted) ? result.inserted[0] : null
@@ -962,6 +1066,7 @@ const UploadDialog = ({ isOpen, setIsOpen, uploadType, onUploadComplete }) => {
           const thumbBlob = await thumbPromise
           if (thumbBlob) {
             setUploadProgress(96)
+            setUploadStatusTitle('Finalizando upload...')
 
             let thumbPath = `thumbnails/${user.id}/${insertedRow.id}.jpg`
             let thumbUploadBody = thumbBlob
@@ -1011,6 +1116,7 @@ const UploadDialog = ({ isOpen, setIsOpen, uploadType, onUploadComplete }) => {
 
             if (publicUrl) {
               setUploadProgress(98)
+              setUploadStatusTitle('Finalizando upload...')
               const { error: updateError } = await supabase
                 .from('videos')
                 .update({ thumbnail_url: publicUrl })
@@ -1079,31 +1185,67 @@ const UploadDialog = ({ isOpen, setIsOpen, uploadType, onUploadComplete }) => {
         ...getUploadTrace(),
         error,
       })
+      stopUploadProcessingTicker()
       setIsUploading(false)
       setUploadProgress(0)
+      setUploadStatusTitle('')
       toast({
-        title: 'Erro no upload',
-        description: error.message || 'Não foi possível fazer o upload. Tente novamente.',
         ...formatUploadError(error),
         variant: 'destructive',
       })
     }
   }
 
-  const dialogTitle =
-    uploadType === 'photo'
-      ? 'Postar Nova Foto'
-      : uploadType === 'short-video'
-      ? 'Postar Vídeo Curto'
-      : 'Postar Vídeo Longo'
+  const dialogTitle = uploadType === 'photo' ? 'Postar Nova Foto' : 'Postar Vídeo'
+
+  const isAdjustMode = Boolean(videoAdjust)
+  const headerTitle = isAdjustMode ? 'Ajustar Seu Vídeo' : dialogTitle
+  const headerDescription = isAdjustMode
+    ? 'Se o vídeo estiver muito curto ou longo, ajuste o corte para caber nas regras da plataforma.'
+    : 'Compartilhe seu trabalho com a comunidade. Preencha os detalhes abaixo.'
 
   return (
     <Dialog open={isOpen} onOpenChange={handleClose}>
-      <DialogContent className="sm:max-w-[525px]">
-        <DialogHeader className="-mx-6 px-6 pb-4 border-b border-border/60">
-          <DialogTitle className="text-xl font-semibold tracking-tight">{dialogTitle}</DialogTitle>
-          <DialogDescription className="leading-snug">
-            Compartilhe seu trabalho com a comunidade. Preencha os detalhes abaixo.
+      <DialogContent className={isAdjustMode ? 'sm:max-w-[760px]' : 'sm:max-w-[525px]'}>
+        <DialogHeader
+          className={
+            isAdjustMode
+              ? '-mx-6 px-6 pt-5 pb-3 text-center relative'
+              : '-mx-6 px-6 pb-4 border-b border-border/60'
+          }
+        >
+          {isAdjustMode ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={() => {
+                setIsPreviewPlaying(false)
+                clearSelectedFile()
+              }}
+              className="absolute left-3 top-4 h-10 w-10 rounded-full"
+              aria-label="Voltar"
+            >
+              <ArrowLeft className="h-5 w-5" />
+            </Button>
+          ) : null}
+          <DialogTitle
+            className={
+              isAdjustMode
+                ? 'text-2xl font-semibold tracking-tight'
+                : 'text-xl font-semibold tracking-tight'
+            }
+          >
+            {headerTitle}
+          </DialogTitle>
+          <DialogDescription
+            className={
+              isAdjustMode
+                ? 'mx-auto max-w-[28rem] leading-snug'
+                : 'leading-snug'
+            }
+          >
+            {headerDescription}
           </DialogDescription>
         </DialogHeader>
 
@@ -1134,7 +1276,9 @@ const UploadDialog = ({ isOpen, setIsOpen, uploadType, onUploadComplete }) => {
               className="flex flex-col items-center justify-center py-10 text-center"
             >
               <Loader2 className="h-16 w-16 animate-spin text-primary mb-4" />
-              <h3 className="text-xl font-semibold text-foreground">Enviando...</h3>
+              <h3 className="text-xl font-semibold text-foreground">
+                {uploadStatusTitle || 'Enviando...'}
+              </h3>
               <p className="text-muted-foreground mt-1">{uploadProgress}%</p>
               <div className="w-full bg-muted rounded-full h-2.5 mt-3">
                 <motion.div
@@ -1145,6 +1289,474 @@ const UploadDialog = ({ isOpen, setIsOpen, uploadType, onUploadComplete }) => {
                 />
               </div>
             </motion.div>
+          ) : videoAdjust ? (
+            <motion.div
+              key="adjust"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+            >
+              {(() => {
+                const clamp = (n, min, max) => Math.min(max, Math.max(min, n))
+                const EPS = 0.05
+                const releaseSeekGuard = () =>
+                  Promise.resolve().then(() => {
+                    videoSeekGuardRef.current = false
+                  })
+                const safeSeek = (videoEl, seconds) => {
+                  if (!videoEl) return
+                  try {
+                    videoSeekGuardRef.current = true
+                    videoEl.currentTime = Math.max(0, Number(seconds) || 0)
+                  } finally {
+                    releaseSeekGuard()
+                  }
+                }
+
+                const fmt = (totalSeconds) => {
+                  const n = Math.max(0, Math.floor(Number(totalSeconds) || 0))
+                  const mm = Math.floor(n / 60)
+                  const ss = n % 60
+                  if (mm >= 60) {
+                    const hh = Math.floor(mm / 60)
+                    const m2 = mm % 60
+                    return `${hh}:${String(m2).padStart(2, '0')}:${String(ss).padStart(2, '0')}`
+                  }
+                  return `${mm}:${String(ss).padStart(2, '0')}`
+                }
+
+                const durationSafe = Math.max(1, Number(videoAdjust.durationSeconds) || 1)
+                const startPct = Math.max(
+                  0,
+                  Math.min(100, (Number(videoAdjust.startSeconds) / durationSafe) * 100)
+                )
+                const endPct = Math.max(
+                  0,
+                  Math.min(100, (Number(videoAdjust.endSeconds) / durationSafe) * 100)
+                )
+                const selSeconds = Math.max(
+                  0,
+                  Number(videoAdjust.endSeconds) - Number(videoAdjust.startSeconds)
+                )
+                const segWidth = Math.max(0, endPct - startPct)
+                const midPct = Math.max(0, Math.min(100, (startPct + endPct) / 2))
+
+                const normalizeRange = (nextValues, prev) => {
+                  const STEP = 0.1
+                  const snap = (n) => Math.round((Number(n) || 0) / STEP) * STEP
+
+                  const duration = Math.max(0, Number(prev?.durationSeconds) || 0)
+                  const minSecondsBase = Math.max(0, Number(prev?.rules?.minSeconds) || 0)
+                  const minExclusive = Boolean(prev?.rules?.minExclusive)
+                  const minSeconds = minExclusive ? minSecondsBase + STEP : minSecondsBase
+                  const maxSecondsRaw = Number(prev?.rules?.maxSeconds) || 0
+                  const maxSeconds = Math.max(minSeconds, maxSecondsRaw)
+
+                  const prevStart = snap(prev?.startSeconds ?? 0)
+                  const prevEnd = snap(prev?.endSeconds ?? 0)
+
+                  let nextStart = snap(nextValues?.[0] ?? prevStart)
+                  let nextEnd = snap(nextValues?.[1] ?? prevEnd)
+
+                  const deltaStart = Math.abs(nextStart - prevStart)
+                  const deltaEnd = Math.abs(nextEnd - prevEnd)
+                  const active = deltaStart >= deltaEnd ? 'start' : 'end'
+
+                  nextStart = clamp(nextStart, 0, duration)
+                  nextEnd = clamp(nextEnd, 0, duration)
+
+                  // Ensure order by prioritizing the active thumb.
+                  if (nextStart > nextEnd) {
+                    if (active === 'start') nextEnd = nextStart
+                    else nextStart = nextEnd
+                  }
+
+                  if (active === 'start') {
+                    const minEnd = nextStart + minSeconds
+                    const maxEnd = Math.min(duration, nextStart + maxSeconds)
+                    nextEnd = clamp(nextEnd, minEnd, maxEnd)
+                  } else {
+                    const maxStart = nextEnd - minSeconds
+                    const minStart = Math.max(0, nextEnd - maxSeconds)
+                    nextStart = clamp(nextStart, minStart, maxStart)
+                  }
+
+                  // Final safety: keep within bounds + enforce min/max by moving the opposite thumb.
+                  nextStart = clamp(nextStart, 0, duration)
+                  nextEnd = clamp(nextEnd, 0, duration)
+
+                  // Enforce min/max with edge-aware shifting (trimmer behavior).
+                  let len = nextEnd - nextStart
+                  if (len < minSeconds) {
+                    if (active === 'start') {
+                      nextEnd = nextStart + minSeconds
+                      if (nextEnd > duration) {
+                        nextEnd = duration
+                        nextStart = Math.max(0, nextEnd - minSeconds)
+                      }
+                    } else {
+                      nextStart = nextEnd - minSeconds
+                      if (nextStart < 0) {
+                        nextStart = 0
+                        nextEnd = Math.min(duration, nextStart + minSeconds)
+                      }
+                    }
+                  }
+
+                  len = nextEnd - nextStart
+                  if (len > maxSeconds) {
+                    if (active === 'start') {
+                      nextEnd = nextStart + maxSeconds
+                      if (nextEnd > duration) {
+                        nextEnd = duration
+                        nextStart = Math.max(0, nextEnd - maxSeconds)
+                      }
+                    } else {
+                      nextStart = nextEnd - maxSeconds
+                      if (nextStart < 0) {
+                        nextStart = 0
+                        nextEnd = Math.min(duration, nextStart + maxSeconds)
+                      }
+                    }
+                  }
+
+                  // Re-ensure order after clamps.
+                  if (nextStart > nextEnd) nextStart = nextEnd
+
+                  return [snap(nextStart), snap(nextEnd)]
+                }
+
+                const clampVideoToSelection = (videoEl, sel) => {
+                  if (!videoEl || !sel) return
+                  const start = Number(sel.startSeconds) || 0
+                  const end = Number(sel.endSeconds) || 0
+                  const t = Number(videoEl.currentTime) || 0
+
+                  if (t < start) {
+                    safeSeek(videoEl, start)
+                    return
+                  }
+                  if (t >= end) {
+                    safeSeek(videoEl, start)
+                  }
+                }
+
+                const stopAtEndAndReset = (videoEl, sel) => {
+                  if (!videoEl || !sel) return
+                  const start = Number(sel.startSeconds) || 0
+                  const end = Number(sel.endSeconds) || 0
+                  const t = Number(videoEl.currentTime) || 0
+                  if (t >= end - EPS) {
+                    try {
+                      videoEl.pause()
+                    } catch {
+                      // ignore
+                    }
+                    safeSeek(videoEl, start)
+                  }
+                }
+
+                const applyPresetMode = (targetUploadType) => {
+                  const nextRules = getVideoRules(targetUploadType)
+                  if (!nextRules) return
+
+                  const duration = Math.max(0, Number(videoAdjust.durationSeconds) || 0)
+                  const min = Number(nextRules.minSeconds) || 0
+                  const minOk = nextRules.minExclusive ? duration > min : duration >= min
+                  if (!minOk) {
+                    toast({
+                      title: 'Não é possível usar este modo',
+                      description: `Este vídeo tem ${fmt(duration)} e não comporta o mínimo ${
+                        nextRules.minExclusive ? 'maior que ' : ''
+                      }${fmt(min)}.`,
+                      variant: 'destructive',
+                    })
+                    return
+                  }
+
+                  let nextSel = null
+                  setVideoAdjust((prev) => {
+                    if (!prev) return prev
+                    const draft = { ...prev, targetUploadType, rules: nextRules }
+                    const [ns, ne] = normalizeRange([draft.startSeconds, draft.endSeconds], draft)
+                    nextSel = { startSeconds: ns, endSeconds: ne }
+                    return { ...draft, startSeconds: ns, endSeconds: ne }
+                  })
+
+                  try {
+                    if (videoPreviewRef.current && nextSel) {
+                      clampVideoToSelection(videoPreviewRef.current, nextSel)
+                    }
+                  } catch {
+                    // ignore
+                  }
+                }
+
+                return (
+                  <div className="grid gap-3 pt-3">
+                    <div className="overflow-hidden rounded-3xl border bg-muted/10">
+                      <div className="relative aspect-video w-full bg-muted">
+                        {preview ? (
+                          <video
+                            ref={videoPreviewRef}
+                            src={preview}
+                            playsInline
+                            controlsList="nodownload noplaybackrate noremoteplayback"
+                            disablePictureInPicture
+                            onPlay={() => {
+                              const el = videoPreviewRef.current
+                              if (!el) return
+                              safeSeek(el, videoAdjust.startSeconds)
+                              setIsPreviewPlaying(true)
+                            }}
+                            onPause={() => setIsPreviewPlaying(false)}
+                            onTimeUpdate={() => {
+                              const el = videoPreviewRef.current
+                              if (!el) return
+                              stopAtEndAndReset(el, videoAdjust)
+                            }}
+                            onSeeking={() => {
+                              if (videoSeekGuardRef.current) return
+                              const el = videoPreviewRef.current
+                              if (!el) return
+                              clampVideoToSelection(el, videoAdjust)
+                            }}
+                            className="h-full w-full object-cover"
+                          />
+                        ) : null}
+
+                        {preview ? (
+                          <button
+                            type="button"
+                            aria-label="Play/Pause"
+                            className="absolute left-1/2 top-1/2 z-20 h-24 w-24 -translate-x-1/2 -translate-y-1/2 rounded-full bg-transparent"
+                            onClick={(e) => {
+                              e.preventDefault()
+                              e.stopPropagation()
+                              const el = videoPreviewRef.current
+                              if (!el) return
+
+                              if (el.paused) {
+                                try {
+                                  clampVideoToSelection(el, videoAdjust)
+                                } catch {
+                                  // ignore
+                                }
+                                el.play().catch(() => {})
+                              } else {
+                                el.pause()
+                              }
+                            }}
+                          >
+                            {!isPreviewPlaying ? (
+                              <span className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                                <span className="flex h-12 w-12 items-center justify-center rounded-full bg-black/35 text-white backdrop-blur-sm border border-white/15">
+                                  <Pause className="h-6 w-6" />
+                                </span>
+                              </span>
+                            ) : null}
+                          </button>
+                        ) : null}
+
+                        <div className="absolute inset-x-0 bottom-0 z-10 px-2 pb-2 pt-2">
+                          <div className="rounded-lg bg-foreground/15 backdrop-blur-sm border border-border/20 px-2 py-1.5">
+                            <div className="flex items-center gap-2">
+                              <div className="rounded-full bg-background/50 px-1.5 py-0.5 text-[10px] text-foreground tabular-nums border border-border/30 leading-none">
+                                0:00
+                              </div>
+                              <div className="relative h-8 flex-1">
+                              <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-1.5 rounded-full bg-background/25" />
+
+                              <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 flex justify-between opacity-60">
+                                {Array.from({ length: 32 }).map((_, i) => (
+                                  <div key={i} className="h-2 w-px bg-background/20" />
+                                ))}
+                              </div>
+
+                              <div
+                                className="absolute top-1/2 -translate-y-1/2 h-6 rounded-md border border-primary/80 bg-primary/10"
+                                style={{ left: `${startPct}%`, width: `${segWidth}%` }}
+                              />
+
+                              <div
+                                className="absolute top-1/2 translate-y-3 h-2 w-2 rotate-45 rounded-sm bg-primary/90"
+                                style={{ left: `calc(${midPct}% - 4px)` }}
+                              />
+
+                              <div className="absolute inset-0">
+                                <SliderPrimitive.Root
+                                  className="absolute inset-0 flex h-8 w-full touch-none select-none items-center"
+                                  min={0}
+                                  max={Math.max(0, Number(videoAdjust.durationSeconds) || 0)}
+                                  step={0.1}
+                                  value={[
+                                    Number(videoAdjust.startSeconds) || 0,
+                                    Number(videoAdjust.endSeconds) || 0,
+                                  ]}
+                                  onValueChange={(values) => {
+                                    let seekTo = null
+                                    let nextSel = null
+                                    let didStartChange = false
+                                    setVideoAdjust((prev) => {
+                                      if (!prev) return prev
+                                      const [nextStart, nextEnd] = normalizeRange(values, prev)
+                                      didStartChange = nextStart !== prev.startSeconds
+                                      seekTo = nextStart
+                                      nextSel = { startSeconds: nextStart, endSeconds: nextEnd }
+                                      return {
+                                        ...prev,
+                                        startSeconds: nextStart,
+                                        endSeconds: nextEnd,
+                                      }
+                                    })
+                                    try {
+                                      const el = videoPreviewRef.current
+                                      if (!el || !nextSel) return
+                                      if (didStartChange && seekTo != null) safeSeek(el, seekTo)
+                                      clampVideoToSelection(el, nextSel)
+                                    } catch {
+                                      // ignore
+                                    }
+                                  }}
+                                >
+                                  <SliderPrimitive.Track className="relative h-1 w-full grow overflow-hidden rounded-full bg-transparent">
+                                    <SliderPrimitive.Range className="absolute h-full bg-transparent" />
+                                  </SliderPrimitive.Track>
+                                  <SliderPrimitive.Thumb
+                                    aria-label="Início"
+                                    className="relative block h-10 w-2.5 rounded-full border-2 border-primary bg-background shadow-md ring-2 ring-primary/10 ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                                  >
+                                    <span className="absolute -bottom-0.5 left-1/2 h-1.5 w-1.5 -translate-x-1/2 rounded-full border-2 border-primary bg-background shadow" />
+                                  </SliderPrimitive.Thumb>
+                                  <SliderPrimitive.Thumb
+                                    aria-label="Fim"
+                                    className="relative block h-10 w-2.5 rounded-full border-2 border-primary bg-background shadow-md ring-2 ring-primary/10 ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                                  >
+                                    <span className="absolute -bottom-0.5 left-1/2 h-1.5 w-1.5 -translate-x-1/2 rounded-full border-2 border-primary bg-background shadow" />
+                                  </SliderPrimitive.Thumb>
+                                </SliderPrimitive.Root>
+                              </div>
+                              </div>
+                              <div className="rounded-full bg-background/50 px-1.5 py-0.5 text-[10px] text-foreground tabular-nums border border-border/30 leading-none">
+                                {fmt(videoAdjust.durationSeconds)}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="px-4 pb-2 pt-2">
+                        <div className="flex flex-wrap items-center justify-center gap-2 text-xs tabular-nums">
+                          <span className="rounded-full border bg-background/60 px-3 py-1 text-foreground">
+                            Trecho {fmt(selSeconds)}
+                          </span>
+                          <span className="rounded-full border bg-background/40 px-3 py-1 text-muted-foreground">
+                            {videoAdjust.rules.minExclusive
+                              ? `> ${fmt(videoAdjust.rules.minSeconds)}`
+                              : `Mín ${fmt(videoAdjust.rules.minSeconds)}`}
+                          </span>
+                          <span className="rounded-full border bg-background/40 px-3 py-1 text-muted-foreground">
+                            Máx {fmt(videoAdjust.rules.maxSeconds)}
+                          </span>
+                        </div>
+
+                        {videoAdjust.targetUploadType !== videoAdjust.originalUploadType ? (
+                          <p className="mt-2 text-center text-xs text-muted-foreground">
+                            Será postado como{' '}
+                            <span className="font-medium text-foreground">
+                              {videoAdjust.targetUploadType === 'short-video' ? 'Vídeo curto' : 'Vídeo longo'}
+                            </span>
+                            .
+                          </p>
+                        ) : null}
+                      </div>
+                    </div>
+
+                    <div className="grid gap-3">
+                      <div className="grid grid-cols-2 gap-3">
+                        <Button
+                          type="button"
+                          variant={videoAdjust.targetUploadType === 'short-video' ? 'default' : 'outline'}
+                          onClick={() => applyPresetMode('short-video')}
+                          className="h-16 rounded-2xl justify-start gap-3 px-4"
+                        >
+                          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                            <Scissors className="h-5 w-5" />
+                          </span>
+                          <span className="text-left">
+                            <span className="block text-sm font-semibold">Cortar vídeo até 3:00</span>
+                            <span className="block text-xs text-muted-foreground">Até 3:00</span>
+                          </span>
+                        </Button>
+                        <Button
+                          type="button"
+                          variant={videoAdjust.targetUploadType === 'long-video' ? 'default' : 'outline'}
+                          onClick={() => applyPresetMode('long-video')}
+                          className="h-16 rounded-2xl justify-start gap-3 px-4"
+                        >
+                          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                            <Clapperboard className="h-5 w-5" />
+                          </span>
+                          <span className="text-left">
+                            <span className="block text-sm font-semibold">Cortar vídeo até 10:00</span>
+                            <span className="block text-xs text-muted-foreground">Até 10:00</span>
+                          </span>
+                        </Button>
+                      </div>
+
+                      <Button
+                        type="button"
+                        variant="outline"
+                        disabled
+                        className="h-14 rounded-2xl justify-start gap-3 px-4 disabled:opacity-100"
+                      >
+                        <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                          <Wand2 className="h-5 w-5" />
+                        </span>
+                        <span className="text-left">
+                          <span className="block text-sm font-semibold text-foreground">Ajustar automaticamente</span>
+                          <span className="block text-xs text-muted-foreground">Em breve</span>
+                        </span>
+                      </Button>
+                    </div>
+                  </div>
+                )
+              })()}
+
+              <DialogFooter className="-mx-6 px-6 pt-5 border-t border-border/60 mt-2 flex-col gap-2 sm:flex-col">
+                <Button
+                  className="h-12 w-full text-base"
+                  onClick={() => {
+                    const seg = Math.max(0, videoAdjust.endSeconds - videoAdjust.startSeconds)
+                    const { minSeconds, maxSeconds } = videoAdjust.rules
+                    const minOk = videoAdjust.rules.minExclusive ? seg > minSeconds : seg >= minSeconds
+                    if (!minOk || seg > maxSeconds) {
+                      toast({
+                        title: 'Trecho inválido',
+                        description: videoAdjust.rules.minExclusive
+                          ? `Selecione um trecho maior que ${fmt(minSeconds)} e até ${fmt(maxSeconds)}.`
+                          : `Selecione um trecho entre ${fmt(minSeconds)} e ${fmt(maxSeconds)}.`,
+                        variant: 'destructive',
+                      })
+                      return
+                    }
+                    setVideoTrim({
+                      startSeconds: videoAdjust.startSeconds,
+                      endSeconds: videoAdjust.endSeconds,
+                      targetUploadType: videoAdjust.targetUploadType,
+                      originalDurationSeconds: Number(videoAdjust.durationSeconds) || 0,
+                    })
+                    setFile(videoAdjust.file)
+                    setVideoAdjust(null)
+                  }}
+                >
+                  Cortar e continuar
+                </Button>
+                <Button variant="outline" onClick={clearSelectedFile} className="h-12 w-full">
+                  Cancelar
+                </Button>
+              </DialogFooter>
+            </motion.div>
           ) : (
             <motion.div
               key="form"
@@ -1154,42 +1766,109 @@ const UploadDialog = ({ isOpen, setIsOpen, uploadType, onUploadComplete }) => {
             >
               <div className="grid gap-4 pt-4">
                 {!preview && (
-                  <div
-                    className="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-dashed border-muted-foreground/50 rounded-md cursor-pointer hover:border-primary transition-colors"
-                    onClick={() => fileInputRef.current?.click()}
-                  >
-                    <div className="space-y-1 text-center">
-                      {uploadType === 'photo' ? (
+                  uploadType === 'photo' ? (
+                    <div
+                      className="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-dashed border-muted-foreground/50 rounded-md cursor-pointer hover:border-primary transition-colors"
+                      onClick={() => fileInputRef.current?.click()}
+                    >
+                      <div className="space-y-1 text-center">
                         <ImageIcon className="mx-auto h-12 w-12 text-muted-foreground" />
-                      ) : (
-                        <VideoIcon className="mx-auto h-12 w-12 text-muted-foreground" />
-                      )}
-                      <div className="flex text-sm text-muted-foreground">
-                        <Label
-                          htmlFor="file-upload"
-                          className="relative cursor-pointer rounded-md font-medium text-primary hover:text-primary/80 focus-within:outline-none focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2"
-                        >
-                          <span>Clique para enviar</span>
-                        </Label>
-                        <p className="pl-1">ou arraste e solte</p>
+                        <div className="flex text-sm text-muted-foreground">
+                          <Label
+                            htmlFor="file-upload"
+                            className="relative cursor-pointer rounded-md font-medium text-primary hover:text-primary/80 focus-within:outline-none focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2"
+                          >
+                            <span>Clique para enviar</span>
+                          </Label>
+                          <p className="pl-1">ou arraste e solte</p>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          Qualquer imagem até 30MB — otimiza/normaliza automático
+                        </p>
                       </div>
-                      <p className="text-xs text-muted-foreground">
-                        {uploadType === 'photo'
-                          ? 'Qualquer imagem até 30MB — otimiza/normaliza automático'
-                          : 'MP4 até ' +
-                            (uploadType === 'short-video' ? '50MB' : '200MB')}
-                      </p>
+                      <Input
+                        id="file-upload"
+                        name="file-upload"
+                        type="file"
+                        className="sr-only"
+                        ref={fileInputRef}
+                        onChange={handleFileChange}
+                        accept={getAcceptedFileTypes()}
+                      />
                     </div>
-                    <Input
-                      id="file-upload"
-                      name="file-upload"
-                      type="file"
-                      className="sr-only"
-                      ref={fileInputRef}
-                      onChange={handleFileChange}
-                      accept={getAcceptedFileTypes()}
-                    />
-                  </div>
+                  ) : (
+                    <div className="mt-2 flex justify-center rounded-2xl border border-dashed border-border/70 bg-muted/10 px-4 py-8 transition-colors sm:px-6">
+                      <div className="w-full space-y-5">
+                        <div className="grid grid-cols-2 gap-4">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="min-h-36 w-full rounded-2xl border border-primary/20 bg-primary/5 shadow-sm hover:bg-primary/10 hover:shadow-md transition-all flex flex-col items-center justify-center gap-2 px-5 py-3 text-center"
+                            onClick={() => fileInputRef.current?.click()}
+                          >
+                            <span className="h-16 w-16 rounded-2xl border border-primary/25 bg-primary/12 flex items-center justify-center">
+                              <Inbox className="h-8 w-8 text-primary" />
+                            </span>
+                            <span className="text-center">
+                              <span className="flex min-h-8 items-center justify-center text-base font-semibold leading-tight text-foreground">
+                                Abrir arquivo
+                              </span>
+                              <span className="mt-1 flex min-h-8 items-start justify-center text-xs leading-snug text-muted-foreground">
+                                Galeria ou arquivos
+                              </span>
+                            </span>
+                          </Button>
+
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="min-h-36 w-full rounded-2xl border border-primary/20 bg-primary/5 shadow-sm hover:bg-primary/10 hover:shadow-md transition-all flex flex-col items-center justify-center gap-2 px-5 py-3 text-center"
+                            onClick={() => cameraInputRef.current?.click()}
+                          >
+                            <span className="h-16 w-16 rounded-2xl border border-primary/25 bg-primary/12 flex items-center justify-center">
+                              <Camera className="h-8 w-8 text-primary" />
+                            </span>
+                            <span className="text-center">
+                              <span className="flex min-h-8 items-center justify-center text-base font-semibold leading-tight text-foreground">
+                                Abrir câmera
+                              </span>
+                              <span className="mt-1 flex min-h-8 items-start justify-center text-xs leading-snug text-muted-foreground">
+                                Usar câmera do celular
+                              </span>
+                            </span>
+                          </Button>
+                        </div>
+
+                        <div className="flex justify-center pt-1">
+                          <span className="inline-flex items-center rounded-full border border-border/60 bg-background/60 px-2.5 py-0.5 text-[11px] text-muted-foreground">
+                            MP4 até {uploadType === 'short-video' ? '50MB' : '200MB'}
+                          </span>
+                        </div>
+
+                        <Input
+                          id="file-upload"
+                          name="file-upload"
+                          type="file"
+                          className="sr-only"
+                          ref={fileInputRef}
+                          onChange={handleFileChange}
+                          accept={getAcceptedFileTypes()}
+                          data-source="file"
+                        />
+                        <Input
+                          id="camera-upload"
+                          name="camera-upload"
+                          type="file"
+                          className="sr-only"
+                          ref={cameraInputRef}
+                          onChange={handleFileChange}
+                          accept="video/*"
+                          capture="environment"
+                          data-source="camera"
+                        />
+                      </div>
+                    </div>
+                  )
                 )}
 
                 {preview && (
@@ -1220,25 +1899,18 @@ const UploadDialog = ({ isOpen, setIsOpen, uploadType, onUploadComplete }) => {
                     <Button
                       variant="link"
                       size="sm"
-                      onClick={() => {
-                        try {
-                          fileSelectOpIdRef.current = (Number(fileSelectOpIdRef.current) || 0) + 1
-                        } catch {
-                          // ignore
-                        }
-                        setIsConvertingHeic(false)
-                        setPreview((prev) => {
-                          revokeObjectUrlIfNeeded(prev)
-                          return null
-                        })
-                        setFile(null)
-                        setImageOptimizeNote('')
-                        if (fileInputRef.current) fileInputRef.current.value = ''
-                      }}
+                      onClick={clearSelectedFile}
                       className="mt-2 text-destructive"
                     >
                       Remover arquivo
                     </Button>
+
+                    {(uploadType === 'short-video' || uploadType === 'long-video') && videoTrim ? (
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        Trecho selecionado: {videoTrim.startSeconds}s – {videoTrim.endSeconds}s • Será postado
+                        como {videoTrim.targetUploadType === 'short-video' ? 'Vídeo curto' : 'Vídeo longo'}
+                      </p>
+                    ) : null}
 
                     {uploadType === 'photo' && imageOptimizeNote ? (
                       <p className="mt-2 text-xs text-muted-foreground">{imageOptimizeNote}</p>
