@@ -313,6 +313,12 @@ export default defineConfig(({ command }) => {
 						if (!id) return
 						if (!id.includes('node_modules')) return
 
+						const normalizedId = id.replace(/\\/g, '/')
+
+						if (normalizedId.includes('/node_modules/react-leaflet/')) return 'leaflet'
+						if (normalizedId.includes('/node_modules/leaflet/')) return 'leaflet'
+						if (normalizedId.includes('/node_modules/heic2any/')) return 'heic'
+
 						// Keep big deps out of the main entry chunk.
 						if (id.includes('@supabase/')) return 'supabase'
 						if (id.includes('framer-motion')) return 'framer'
