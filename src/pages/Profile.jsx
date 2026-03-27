@@ -1004,12 +1004,24 @@ const Profile = () => {
   }, [profileId, loadUserProfile])
 
   const handleOpenUploadDialog = (type) => {
-    setUploadType(type)
+    if (type === 'live') {
+      toast({
+        title: 'Ao vivo',
+        description: 'Transmissão ao vivo em breve.',
+        variant: 'default',
+      })
+      return
+    }
+
+    const normalized =
+      type === 'short-video' || type === 'long-video' ? 'video' : type
+
+    setUploadType(normalized)
     setIsUploadDialogOpen(true)
 
     updateSearchParams(
       (p) => {
-        p.set('upload', type)
+        p.set('upload', normalized)
       },
       { replace: false }
     )

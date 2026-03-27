@@ -13,12 +13,8 @@ const AddContentFab = ({ onOpenUploadDialog }) => {
 
   const fabOptions = [
     { icon: <ImageIcon size={20} />, label: 'Foto', type: 'photo' },
-    {
-      icon: <VideoIcon size={20} />,
-      label: 'Vídeo Curto',
-      type: 'short-video',
-    },
-    { icon: <Film size={20} />, label: 'Vídeo Longo', type: 'long-video' },
+    { icon: <VideoIcon size={20} />, label: 'Vídeo', type: 'video' },
+    { icon: <Film size={20} />, label: 'Ao vivo', type: 'live' },
   ]
 
   const fabVariants = {
