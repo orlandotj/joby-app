@@ -94,7 +94,7 @@ const Messages = () => {
   const location = useLocation()
   const { user } = useAuth()
   const { toast } = useToast()
-  const { setShowMobileHeader } = useMobileHeader()
+  const { setShowMobileHeader, showMobileHeader } = useMobileHeader()
   const [serviceChatBooking, setServiceChatBooking] = useState(null)
   const [serviceChatLoading, setServiceChatLoading] = useState(false)
   const [mobileTopTab, setMobileTopTab] = useState('conversas')
@@ -2170,6 +2170,15 @@ const Messages = () => {
     alert(isMutedNext ? 'Notificações silenciadas' : 'Notificações ativadas')
   }
 
+  const CHAT_COMPOSER_FALLBACK_PX = 15
+  const chatBottomPadding = (() => {
+    if (isDesktopViewport) return '16px'
+
+    const bottomOffset = keyboardHeight > 0 ? keyboardHeight : 0
+    const composerPx = Math.max(CHAT_COMPOSER_FALLBACK_PX, Number(mobileComposerHeight || 0))
+    return `calc(${bottomOffset}px + ${composerPx}px + env(safe-area-inset-bottom))`
+  })()
+
   return (
     <div
       className={`h-full w-full flex flex-col overflow-hidden ${
@@ -2259,22 +2268,8 @@ const Messages = () => {
                   style={{
                     WebkitOverflowScrolling: 'touch',
                     paddingTop: '8px',
-                    paddingBottom: (() => {
-                      if (isDesktopViewport) return '16px'
-
-                      const EXTRA_GAP_PX = 0
-                      const bottomOffset = keyboardHeight > 0 ? keyboardHeight : 0
-                      const composerPx = Math.max(72, Number(mobileComposerHeight || 0))
-                      return `calc(${bottomOffset}px + ${composerPx}px + ${EXTRA_GAP_PX}px + env(safe-area-inset-bottom))`
-                    })(),
-                    scrollPaddingBottom: (() => {
-                      if (isDesktopViewport) return '16px'
-
-                      const EXTRA_GAP_PX = 0
-                      const bottomOffset = keyboardHeight > 0 ? keyboardHeight : 0
-                      const composerPx = Math.max(72, Number(mobileComposerHeight || 0))
-                      return `calc(${bottomOffset}px + ${composerPx}px + ${EXTRA_GAP_PX}px + env(safe-area-inset-bottom))`
-                    })(),
+                    paddingBottom: chatBottomPadding,
+                    scrollPaddingBottom: chatBottomPadding,
                   }}
                 >
                   {(() => {
@@ -3023,7 +3018,12 @@ const Messages = () => {
           }}
           style={{
             position: 'fixed',
-            bottom: keyboardHeight > 0 ? `${keyboardHeight}px` : '64px',
+            bottom:
+              keyboardHeight > 0
+                ? `${keyboardHeight}px`
+                : showMobileHeader === false
+                  ? 'calc(env(safe-area-inset-bottom) + 0px)'
+                  : '64px',
             left: 0,
             right: 0,
             zIndex: 50,

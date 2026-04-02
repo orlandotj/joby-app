@@ -33,7 +33,7 @@ import {
   Pause,
   Volume2,
   VolumeX,
-  Camera,
+  Image as ImageIcon,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -86,7 +86,7 @@ const ServiceDetailsModal = ({
   const editingBookingId = editingBooking?.id || null
   const [customSchedule, setCustomSchedule] = useState('')
   const [profileCardProfile, setProfileCardProfile] = useState(null)
-  const requestMediaInputRef = useRef(null)
+  const filePickerInputRef = useRef(null)
   const [requestMediaItems, setRequestMediaItems] = useState([])
   const [activeRequestMediaId, setActiveRequestMediaId] = useState(null)
   const [viewerPlaybackRate, setViewerPlaybackRate] = useState(1)
@@ -611,10 +611,11 @@ const ServiceDetailsModal = ({
       const mime = mimeRaw || inferredMime || ''
       const isImage = mime.startsWith('image/')
       const isVideo = mime.startsWith('video/')
-      if (!isImage && !isVideo) {
+      const isPdf = mime === 'application/pdf'
+      if (!isImage && !isVideo && !isPdf) {
         toast({
           title: 'Formato não suportado',
-          description: 'Envie apenas fotos ou vídeos.',
+          description: 'Envie Foto, Vídeo ou Documento PDF.',
           variant: 'destructive',
         })
         continue
@@ -624,7 +625,11 @@ const ServiceDetailsModal = ({
       if (size > maxBytes) {
         toast({
           title: 'Arquivo muito grande',
-          description: isVideo ? 'Tamanho máximo: 100MB por vídeo.' : 'Tamanho máximo: 20MB por foto.',
+          description: isVideo
+            ? 'Tamanho máximo: 100MB por vídeo.'
+            : isPdf
+            ? 'Tamanho máximo: 20MB por PDF.'
+            : 'Tamanho máximo: 20MB por foto.',
           variant: 'destructive',
         })
         continue
@@ -646,7 +651,20 @@ const ServiceDetailsModal = ({
         }
       }
 
-      if (isVideo) {
+      if (isPdf) {
+        const previewUrl = URL.createObjectURL(normalizedFile)
+        setRequestMediaItems((prev) => [
+          ...prev,
+          {
+            id,
+            kind: 'document',
+            file: normalizedFile,
+            previewUrl,
+            caption: '',
+            status: 'ready',
+          },
+        ])
+      } else if (isVideo) {
         setRequestMediaItems((prev) => [
           ...prev,
           {
@@ -1470,11 +1488,12 @@ const ServiceDetailsModal = ({
           if (!mediaId) return null
           const mediaType = String(row?.media_type || '').trim().toLowerCase()
           const isVideo = mediaType.includes('video')
+          const isPdf = mediaType === 'pdf'
           const cachedSignedUrl = readSignedUrlCache(mediaId)
           return {
             id: mediaId,
             serverMediaId: mediaId,
-            kind: isVideo ? 'video' : 'photo',
+            kind: isPdf ? 'document' : isVideo ? 'video' : 'photo',
             file: null,
             previewUrl: cachedSignedUrl,
             caption: String(row?.caption || '').trim(),
@@ -3392,45 +3411,77 @@ const ServiceDetailsModal = ({
 
       <div className="rounded-2xl border border-border/50 bg-card p-4 shadow-md">
         <div>
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <div className="h-10 w-10 rounded-full bg-muted/50 flex items-center justify-center">
-                  <Camera size={18} className="text-orange-500" />
-                </div>
-                <div className="text-sm font-medium text-foreground">
-                  Fotos e vídeos
+          <div className="mb-3 flex items-start justify-between gap-3">
+            <div className="min-w-0 flex items-start gap-3">
+              <div className="relative h-10 w-10 rounded-2xl border border-border/60 bg-muted/30 flex items-center justify-center flex-shrink-0">
+                <ImageIcon size={18} className="text-primary" />
+                <div className="absolute -bottom-1 -right-1 h-5 w-5 rounded-full bg-background border border-border/60 flex items-center justify-center">
+                  <Play size={12} className="text-primary" />
                 </div>
               </div>
-              <div className="mt-1 text-xs text-muted-foreground">
-                Mostre o local, o problema ou referência do serviço
+              <div className="min-w-0">
+                <div className="text-sm font-semibold leading-tight text-foreground">
+                  Mídias e arquivos
+                </div>
+                <div className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                  Adicione fotos, vídeos ou documentos
+                </div>
               </div>
             </div>
+
             <Button
               type="button"
               size="sm"
               className="gap-2 shrink-0 joby-gradient text-white shadow-sm hover:opacity-95 rounded-xl h-9 px-4"
-              onClick={() => requestMediaInputRef.current?.click()}
+              onClick={() => filePickerInputRef.current?.click()}
             >
-              <Plus size={16} />
-              Adicionar
+              + Adicionar
             </Button>
           </div>
 
-          <div className="mt-4 flex gap-3 overflow-x-auto pb-2 pr-1">
-            {requestMediaItems.map((item) => {
-              const kind = item?.kind
-              const preview = String(item?.previewUrl || '')
-              const isVideo = kind === 'video'
-              const status = String(item?.status || '').trim()
-              const isUploading = status === 'uploading'
-              const isError = status === 'error'
-              return (
-                <div
-                  key={item.id}
-                  className="relative w-24 h-16 rounded-2xl overflow-hidden border border-border/50 bg-muted/20 flex-shrink-0 shadow-sm"
-                >
-                  {preview ? (
+          {requestMediaItems.length ? (
+            <div className="mt-4">
+              <div className="text-xs font-semibold text-muted-foreground">
+                Itens anexados
+              </div>
+              <div className="mt-2 flex gap-3 overflow-x-auto pb-2 pr-1">
+                {requestMediaItems.map((item) => {
+                  const kind = item?.kind
+                  const preview = String(item?.previewUrl || '')
+                  const isVideo = kind === 'video'
+                  const isDocument = kind === 'document'
+                  const status = String(item?.status || '').trim()
+                  const isUploading = status === 'uploading'
+                  const isError = status === 'error'
+                  return (
+                    <div
+                      key={item.id}
+                      className="relative w-24 h-16 rounded-2xl overflow-hidden border border-border/50 bg-muted/20 flex-shrink-0 shadow-sm"
+                    >
+                  {isDocument ? (
+                    <div className="w-full h-full p-2 flex flex-col items-center justify-center gap-1">
+                      <div className="text-base leading-none">📄</div>
+                      <div className="text-[10px] font-semibold text-foreground text-center leading-tight">
+                        Documento PDF
+                      </div>
+                      <button
+                        type="button"
+                        className="text-[10px] font-semibold underline text-primary"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          const url = String(item?.previewUrl || '').trim()
+                          if (!url) return
+                          try {
+                            window.open(url, '_blank', 'noopener,noreferrer')
+                          } catch {
+                            // ignore
+                          }
+                        }}
+                      >
+                        Abrir
+                      </button>
+                    </div>
+                  ) : preview ? (
                     isVideo ? (
                       <video
                         src={preview}
@@ -3500,10 +3551,12 @@ const ServiceDetailsModal = ({
                       <span className="text-[10px] font-medium text-white">Falhou</span>
                     </div>
                   ) : null}
-                </div>
-              )
-            })}
-          </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          ) : null}
 
           {activeMediaItem ? (
             (() => {
@@ -3704,9 +3757,9 @@ const ServiceDetailsModal = ({
           ) : null}
 
           <input
-            ref={requestMediaInputRef}
+            ref={filePickerInputRef}
             type="file"
-            accept="image/*,video/*"
+            accept="image/*,video/*,application/pdf"
             multiple
             className="hidden"
             onChange={async (e) => {
@@ -3920,6 +3973,36 @@ const ServiceDetailsModal = ({
 
         const notes = notesParts.map((x) => String(x || '').trim()).filter(Boolean).join('\n') || null
 
+        const locationText =
+          String(normalizedService?.workArea || '').trim() ||
+          String(currentUser?.location || '').trim() ||
+          String(currentUser?.address_formatted || currentUser?.addressFormatted || '').trim()
+
+        const profileLocationText = String(currentUser?.location || '').trim()
+        const profileAddressFormatted = String(
+          currentUser?.address_formatted || currentUser?.addressFormatted || ''
+        ).trim()
+        const profileLat = Number(currentUser?.address_lat ?? currentUser?.addressLat)
+        const profileLng = Number(currentUser?.address_lng ?? currentUser?.addressLng)
+        const hasProfileCoords = Number.isFinite(profileLat) && Number.isFinite(profileLng)
+
+        // Só salva coords quando o local do booking corresponde ao endereço do perfil.
+        // Se o local veio de `workArea`, ele é área de atuação (texto) e não endereço preciso.
+        const shouldUseProfileSnapshot =
+          !String(normalizedService?.workArea || '').trim() &&
+          Boolean(profileAddressFormatted) &&
+          hasProfileCoords &&
+          (locationText === profileLocationText || locationText === profileAddressFormatted)
+
+        if (!locationText) {
+          toast({
+            title: 'Local obrigatório',
+            description: 'Defina uma localização válida antes de enviar a solicitação.',
+            variant: 'destructive',
+          })
+          return
+        }
+
         const payload = {
           professional_id: professional.id,
           client_id: currentUser.id,
@@ -3929,6 +4012,10 @@ const ServiceDetailsModal = ({
           scheduled_time: effectiveScheduledTime,
           duration: effectiveDurationDays,
           notes,
+          location: locationText,
+          service_address_formatted: shouldUseProfileSnapshot ? profileAddressFormatted : undefined,
+          service_lat: shouldUseProfileSnapshot ? profileLat : undefined,
+          service_lng: shouldUseProfileSnapshot ? profileLng : undefined,
         }
 
         if (import.meta.env.DEV) {
@@ -4295,11 +4382,42 @@ const ServiceDetailsModal = ({
 
         // Insert ONLY core columns first so schema variations don't break the request.
         // Optional columns (totals/days/hours) are applied after insert (best-effort).
-        const inserted = await withTimeout(
+        const snapshotCols = new Set(['service_address_formatted', 'service_lat', 'service_lng'])
+
+        const removeSnapshotFields = (obj) => {
+          const next = { ...(obj || {}) }
+          delete next.service_address_formatted
+          delete next.service_lat
+          delete next.service_lng
+          return next
+        }
+
+        let inserted = await withTimeout(
           supabase.from('bookings').insert([payload]).select('id').single(),
           15000,
           'enviar a solicitação'
         )
+
+        // Compatibilidade: se o schema não tem as colunas novas de snapshot, faça retry
+        // removendo APENAS esses campos e preservando o resto do payload.
+        if (inserted.error && isMissingColumnError(inserted.error)) {
+          const missing = pickMissingColumnName(inserted.error)
+          const msg = String(inserted.error?.message || inserted.error || '').toLowerCase()
+          const missingIsSnapshot =
+            (missing && snapshotCols.has(missing)) ||
+            msg.includes('service_address_formatted') ||
+            msg.includes('service_lat') ||
+            msg.includes('service_lng')
+
+          if (missingIsSnapshot) {
+            const retryPayload = removeSnapshotFields(payload)
+            inserted = await withTimeout(
+              supabase.from('bookings').insert([retryPayload]).select('id').single(),
+              15000,
+              'enviar a solicitação'
+            )
+          }
+        }
 
         if (import.meta.env.DEV) {
           log.debug('BOOKING', 'bookings.insert response (primary)', {
@@ -4315,6 +4433,7 @@ const ServiceDetailsModal = ({
             client_id: payload.client_id,
             service_id: payload.service_id,
             status: payload.status,
+            location: locationText,
           }
 
           const inserted2 = await withTimeout(
@@ -4505,6 +4624,51 @@ const ServiceDetailsModal = ({
                   throw new Error(msg)
                 }
 
+                // PDF: trocar preview blob por URL assinada para o botão "Abrir".
+                let signedUrl = ''
+                try {
+                  if (String(item?.kind || '') === 'document') {
+                    const mediaId = String(json?.media?.id || '').trim()
+                    if (mediaId) {
+                      const candidates = buildAttachmentsApiUrlCandidates('/api/service-attachments/signed-url')
+                      for (const endpoint of candidates) {
+                        const r = await fetch(endpoint, {
+                          method: 'POST',
+                          headers: {
+                            'Content-Type': 'application/json',
+                            Authorization: `Bearer ${accessToken}`,
+                          },
+                          body: JSON.stringify({ mediaId }),
+                        })
+
+                        if (!r.ok) continue
+                        const t = await r.text()
+                        let j = null
+                        try {
+                          j = t ? JSON.parse(t) : null
+                        } catch {
+                          j = null
+                        }
+                        const u = String(j?.signedUrl || '').trim()
+                        if (u) {
+                          signedUrl = u
+                          break
+                        }
+                      }
+                    }
+                  }
+                } catch {
+                  signedUrl = ''
+                }
+
+                if (signedUrl) {
+                  try {
+                    if (item?.previewUrl) revokeLocalObjectUrl(item.previewUrl)
+                  } catch {
+                    // ignore
+                  }
+                }
+
                 setRequestMediaItems((prev) =>
                   prev.map((it) =>
                     it.id === item.id
@@ -4512,6 +4676,14 @@ const ServiceDetailsModal = ({
                       : it
                   )
                 )
+
+                if (signedUrl) {
+                  setRequestMediaItems((prev) =>
+                    prev.map((it) =>
+                      it.id === item.id ? { ...it, previewUrl: signedUrl } : it
+                    )
+                  )
+                }
               } catch (e) {
                 failedUploads.push(e)
                 setRequestMediaItems((prev) =>

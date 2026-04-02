@@ -65,7 +65,8 @@ function assertAllowedUploadFile(file: File) {
   if (!type) throw new Error("Missing content-type");
   const isImage = type.startsWith("image/");
   const isVideo = type.startsWith("video/");
-  if (!isImage && !isVideo) {
+  const isPdf = type === "application/pdf";
+  if (!isImage && !isVideo && !isPdf) {
     throw new Error("Unsupported file type");
   }
 
@@ -75,7 +76,7 @@ function assertAllowedUploadFile(file: File) {
     throw new Error(`File too large (max ${maxBytes} bytes)`);
   }
 
-  return { isImage, isVideo, type, maxBytes };
+  return { isImage, isVideo, isPdf, type, maxBytes };
 }
 
 async function supabaseRestGetOne(env: Env, table: string, query: string) {
@@ -1000,10 +1001,10 @@ export default {
         if (!isUuid(requestId)) return json({ error: "Invalid requestId" }, { status: 400, headers: cors });
         if (!(file instanceof File)) return json({ error: "Missing file" }, { status: 400, headers: cors });
 
-        let mediaType: "image" | "video" = "image";
+        let mediaType: "image" | "video" | "pdf" = "image";
         try {
           const allowed = assertAllowedUploadFile(file);
-          mediaType = allowed.isVideo ? "video" : "image";
+          mediaType = allowed.isVideo ? "video" : allowed.isPdf ? "pdf" : "image";
         } catch (e: any) {
           return json({ error: "Invalid file", message: String(e?.message || e) }, { status: 400, headers: cors });
         }
