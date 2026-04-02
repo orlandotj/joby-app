@@ -37,7 +37,6 @@ const ProfileEdit = lazy(() => import('@/pages/ProfileEdit'))
 const Settings = lazy(() => import('@/pages/Settings'))
 const DebugSupabase = lazy(() => import('@/pages/DebugSupabase'))
 const DebugResume = lazy(() => import('@/pages/DebugResume'))
-const LeafletSmokeTest = lazy(() => import('@/pages/LeafletSmokeTest'))
 const TermsOfService = lazy(() => import('@/pages/TermsOfService'))
 const PrivacyPolicy = lazy(() => import('@/pages/PrivacyPolicy'))
 const ServiceConfirmation = lazy(() => import('@/pages/ServiceConfirmation'))
@@ -137,9 +136,6 @@ function App() {
                     ) : null}
                     {import.meta.env.DEV ? (
                       <Route path="/debug-resume" element={<DebugResume />} />
-                    ) : null}
-                    {import.meta.env.DEV ? (
-                      <Route path="/debug-leaflet" element={<LeafletSmokeTest />} />
                     ) : null}
                     <Route path="/" element={<MainLayout />}>
                       <Route index element={<Feed />} />
