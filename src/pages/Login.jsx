@@ -17,7 +17,7 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
-import { supabase } from '@/lib/supabaseClient'
+import { supabase, buildJobyPublicUrl } from '@/lib/supabaseClient'
 
 const Login = () => {
   const [identifier, setIdentifier] = useState('')
@@ -106,7 +106,11 @@ const Login = () => {
 
     setResetSending(true)
     try {
-      const { error } = await supabase.auth.resetPasswordForEmail(email)
+      const redirectTo = buildJobyPublicUrl('/auth/callback')
+      const { error } = await supabase.auth.resetPasswordForEmail(
+        email,
+        redirectTo ? { redirectTo } : undefined
+      )
       if (error) throw error
 
       // Mensagem neutra (boa prática): não confirma se o email existe.

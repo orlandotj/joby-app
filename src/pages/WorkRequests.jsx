@@ -16,6 +16,7 @@ import { formatPriceUnit } from '@/lib/priceUnit'
 import { cn } from '@/lib/utils'
 import { resolveStorageUrl, useResolvedStorageUrl } from '@/lib/storageUrl'
 import { log } from '@/lib/logger'
+import { shareContent } from '@/lib/shareContent'
 import { useToast } from '@/components/ui/use-toast'
 import { useOverlayLock } from '@/hooks/useOverlayLock'
 import ServiceDetailsModal from '@/components/ServiceDetailsModal'
@@ -1138,6 +1139,31 @@ const WorkRequests = () => {
     return `${String(n).replace('.', ',')} km`
   }
 
+  const roundKm = (km) => {
+    const n = Number(km)
+    if (!Number.isFinite(n) || n <= 0) return null
+    return n < 10 ? Math.round(n * 10) / 10 : Math.round(n)
+  }
+
+  const haversineKm = (lat1, lng1, lat2, lng2) => {
+    const a1 = Number(lat1)
+    const o1 = Number(lng1)
+    const a2 = Number(lat2)
+    const o2 = Number(lng2)
+    if (![a1, o1, a2, o2].every(Number.isFinite)) return null
+    const R = 6371
+    const toRad = (d) => (d * Math.PI) / 180
+    const dLat = toRad(a2 - a1)
+    const dLng = toRad(o2 - o1)
+    const s1 = Math.sin(dLat / 2)
+    const s2 = Math.sin(dLng / 2)
+    const h =
+      s1 * s1 +
+      Math.cos(toRad(a1)) * Math.cos(toRad(a2)) * (s2 * s2)
+    const c = 2 * Math.asin(Math.min(1, Math.sqrt(h)))
+    return roundKm(R * c)
+  }
+
   const buildLocationLine = (booking) => {
     const b = booking || {}
     const place =
@@ -1331,6 +1357,9 @@ const WorkRequests = () => {
     setLoadingEnviados(true)
     try {
       const loadRecebidos = async () => {
+        const originLat = user?.address_lat
+        const originLng = user?.address_lng
+
         const selectVariants = [
           `
             *,
@@ -1394,8 +1423,21 @@ const WorkRequests = () => {
 
         if (lastError) throw lastError
 
+        const recebidasWithDistance = (recebidas || []).map((b) => {
+          const current = b || {}
+          const already = Number(current?.distance_km)
+          if (Number.isFinite(already) && already > 0) return current
+          const km = haversineKm(
+            originLat,
+            originLng,
+            current?.service_lat,
+            current?.service_lng
+          )
+          return km ? { ...current, distance_km: km } : current
+        })
+
         const formattedRecebidas =
-          recebidas?.map((booking) => ({
+          recebidasWithDistance?.map((booking) => ({
             id: booking.id,
             booking,
             title: booking.service?.title || 'Serviço',
@@ -1408,7 +1450,7 @@ const WorkRequests = () => {
           })) || []
 
         // Resolve avatars for embedded profiles (non-blocking)
-        resolveAvatarsForProfiles(recebidas?.map((b) => b?.client).filter(Boolean))
+        resolveAvatarsForProfiles(recebidasWithDistance?.map((b) => b?.client).filter(Boolean))
 
         setRequestsRecebidos(formattedRecebidas)
         writeCache({
@@ -1419,6 +1461,9 @@ const WorkRequests = () => {
       }
 
       const loadEnviados = async () => {
+        const originLat = user?.address_lat
+        const originLng = user?.address_lng
+
         const selectVariants = [
           `
             *,
@@ -1482,8 +1527,21 @@ const WorkRequests = () => {
 
         if (lastError) throw lastError
 
+        const enviadasWithDistance = (enviadas || []).map((b) => {
+          const current = b || {}
+          const already = Number(current?.distance_km)
+          if (Number.isFinite(already) && already > 0) return current
+          const km = haversineKm(
+            originLat,
+            originLng,
+            current?.service_lat,
+            current?.service_lng
+          )
+          return km ? { ...current, distance_km: km } : current
+        })
+
         const formattedEnviadas =
-          enviadas?.map((booking) => ({
+          enviadasWithDistance?.map((booking) => ({
             id: booking.id,
             booking,
             title: booking.service?.title || 'Serviço',
@@ -1498,7 +1556,7 @@ const WorkRequests = () => {
           })) || []
 
         // Resolve avatars for embedded profiles (non-blocking)
-        resolveAvatarsForProfiles(enviadas?.map((b) => b?.professional).filter(Boolean))
+        resolveAvatarsForProfiles(enviadasWithDistance?.map((b) => b?.professional).filter(Boolean))
 
         setRequestsEnviados(formattedEnviadas)
         writeCache({
@@ -4014,10 +4072,19 @@ const WorkRequests = () => {
 
               const serviceTitle = String(booking?.service?.title || detail?.title || '').trim()
 
+              const serviceLat = pickNumber(booking?.service_lat, booking?.serviceLat)
+              const serviceLng = pickNumber(booking?.service_lng, booking?.serviceLng)
+              const hasServiceCoords = Number.isFinite(Number(serviceLat)) && Number.isFinite(Number(serviceLng))
+              const serviceAddressFormatted = String(
+                booking?.service_address_formatted || booking?.serviceAddressFormatted || ''
+              ).trim()
+              const mapsQuery = hasServiceCoords
+                ? `${Number(serviceLat)},${Number(serviceLng)}`
+                : String(serviceAddressFormatted || addressLineRaw || locationLine || '').trim()
+
               const openInMaps = () => {
-                const q = String(addressLineRaw || locationLine || '').trim()
-                if (!q) return
-                const url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`
+                if (!mapsQuery) return
+                const url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(mapsQuery)}`
                 try {
                   window.open(url, '_blank', 'noopener,noreferrer')
                 } catch {
@@ -4026,39 +4093,22 @@ const WorkRequests = () => {
               }
 
               const shareRoute = async () => {
-                const q = String(addressLineRaw || locationLine || '').trim()
-                if (!q) return
-                const url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`
+                if (!mapsQuery) return
+                const url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(mapsQuery)}`
                 const title = `Rota: ${displayName || 'Cliente'}`
-                const text = q
+                const text = mapsQuery
 
                 try {
-                  if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
-                    await navigator.share({ title, text, url })
-                    return
-                  }
-                } catch {
-                  // ignore: fallback abaixo
-                }
-
-                try {
-                  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-                    await navigator.clipboard.writeText(url)
+                  const res = await shareContent({ title, text, url })
+                  if (res?.method === 'clipboard') {
                     toast({
                       title: 'Link copiado',
                       description: 'A rota foi copiada para a área de transferência.',
                       variant: 'success',
                     })
-                    return
                   }
                 } catch {
-                  // ignore
-                }
-
-                try {
-                  window.prompt('Copie o link da rota:', url)
-                } catch {
-                  // ignore
+                  // Mantém comportamento de melhor esforço (sem bloquear UI).
                 }
               }
 
@@ -5012,7 +5062,7 @@ const WorkRequests = () => {
                               type="button"
                               className="h-10 rounded-md joby-gradient text-white"
                               onClick={openInMaps}
-                              disabled={!String(addressLineRaw || locationLine || '').trim()}
+                              disabled={!mapsQuery}
                             >
                               Abrir rota
                             </Button>
@@ -5021,7 +5071,7 @@ const WorkRequests = () => {
                               variant="outline"
                               className="h-10 rounded-md"
                               onClick={shareRoute}
-                              disabled={!String(addressLineRaw || locationLine || '').trim()}
+                              disabled={!mapsQuery}
                             >
                               Compartilhar
                             </Button>
@@ -5305,7 +5355,7 @@ const WorkRequests = () => {
                             size="sm"
                             className="h-8 rounded-full shrink-0"
                             onClick={openInMaps}
-                            disabled={!String(addressLineRaw || locationLine || '').trim()}
+                            disabled={!mapsQuery}
                           >
                             Abrir no mapa
                           </Button>

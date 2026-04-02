@@ -11,21 +11,6 @@ import {
 } from '@/components/ui/select'
 import { ChevronDown, LocateFixed, MapPin, Search } from 'lucide-react'
 
-import { MapContainer, TileLayer, useMap, useMapEvents } from 'react-leaflet'
-import L from 'leaflet'
-import markerIcon2x from 'leaflet/dist/images/marker-icon-2x.png'
-import markerIcon from 'leaflet/dist/images/marker-icon.png'
-import markerShadow from 'leaflet/dist/images/marker-shadow.png'
-
-// Fix default marker icons in bundlers
-// (Leaflet expects these files to exist at specific URLs)
-delete L.Icon.Default.prototype._getIconUrl
-L.Icon.Default.mergeOptions({
-  iconRetinaUrl: markerIcon2x,
-  iconUrl: markerIcon,
-  shadowUrl: markerShadow,
-})
-
 const UF_OPTIONS = [
   'AC',
   'AL',
@@ -57,6 +42,10 @@ const UF_OPTIONS = [
 ]
 
 const digitsOnly = (v) => String(v || '').replace(/\D/g, '')
+
+const isValidLatitude = (lat) => Number.isFinite(lat) && lat >= -90 && lat <= 90
+const isValidLongitude = (lng) => Number.isFinite(lng) && lng >= -180 && lng <= 180
+const isValidLatLng = (lat, lng) => isValidLatitude(lat) && isValidLongitude(lng)
 
 const normalizeBrazilStateToUF = (stateName) => {
   const s = String(stateName || '')
@@ -151,9 +140,28 @@ const reverseGeocodeNominatim = async ({ lat, lng, signal }) => {
   const data = await res.json()
 
   const addr = data?.address || {}
-  const street = addr.road || addr.pedestrian || addr.street || ''
-  const neighborhood = addr.suburb || addr.neighbourhood || ''
-  const city = addr.city || addr.town || addr.village || ''
+  const street =
+    addr.road ||
+    addr.pedestrian ||
+    addr.residential ||
+    addr.footway ||
+    addr.path ||
+    addr.street ||
+    ''
+  const neighborhood =
+    addr.suburb ||
+    addr.neighbourhood ||
+    addr.city_district ||
+    addr.quarter ||
+    addr.borough ||
+    ''
+  const city =
+    addr.city ||
+    addr.town ||
+    addr.village ||
+    addr.municipality ||
+    addr.county ||
+    ''
   const state = addr.state || ''
   const stateCode = addr.state_code || ''
   const postcode = addr.postcode || ''
@@ -193,170 +201,54 @@ const fetchViaCep = async ({ cepDigits, signal }) => {
   }
 }
 
-function InvalidateSizeOnMount() {
-  const map = useMap()
-  useEffect(() => {
-    const t1 = setTimeout(() => map.invalidateSize(), 0)
-    const t2 = setTimeout(() => map.invalidateSize(), 250)
-    return () => {
-      clearTimeout(t1)
-      clearTimeout(t2)
-    }
-  }, [map])
-  return null
-}
-
-function InvalidateOnShow({ active }) {
-  const map = useMap()
-  useEffect(() => {
-    if (!active) return
-    const t1 = setTimeout(() => map.invalidateSize(), 120)
-    const t2 = setTimeout(() => map.invalidateSize(), 500)
-    return () => {
-      clearTimeout(t1)
-      clearTimeout(t2)
-    }
-  }, [active, map])
-  return null
-}
-
-function RecenterOnPosition({ lat, lng }) {
-  const map = useMap()
-  const skipNextRef = useRef(false)
-  // allow parent to mark updates coming from map interactions
-  // by setting map.__JOBY_SKIP_RECENTER__ = true
-  useEffect(() => {
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return
-
-    // If the last position update came from the map itself (moveend),
-    // don't immediately setView again (prevents loop/jitter).
-    // We clear the flag after one skip.
-    if (map && map.__JOBY_SKIP_RECENTER__ === true) {
-      map.__JOBY_SKIP_RECENTER__ = false
-      skipNextRef.current = true
-      return
-    }
-
-    if (skipNextRef.current) {
-      skipNextRef.current = false
-      return
-    }
-
-    map.setView([lat, lng], map.getZoom(), { animate: false })
-  }, [map, lat, lng])
-  return null
-}
-
-function SyncCenterToValue({ onPick }) {
-  const map = useMapEvents({
-    moveend() {
-      const c = map.getCenter()
-      // mark that this update is coming from user interaction
-      map.__JOBY_SKIP_RECENTER__ = true
-      onPick?.({ lat: c.lat, lng: c.lng })
-    },
-    click(e) {
-      map.__JOBY_SKIP_RECENTER__ = true
-      map.panTo(e.latlng)
-      onPick?.({ lat: e.latlng.lat, lng: e.latlng.lng })
-    },
-  })
-  return null
-}
-
 export default function ProfileAddressPicker({ value, onChange, toast }) {
   const [geoLoading, setGeoLoading] = useState(false)
   const [cepLoading, setCepLoading] = useState(false)
-  const [confirmedLabel, setConfirmedLabel] = useState('')
-  const [tilesOk, setTilesOk] = useState(false)
-  const [tileErr, setTileErr] = useState(false)
+  const latestValueRef = useRef(value)
   const [open, setOpen] = useState(() => {
     const v = value || {}
+    const lat = Number(v.lat)
+    const lng = Number(v.lng)
     const hasAny =
       !!String(v.cep || '').trim() ||
       !!String(v.street || '').trim() ||
       !!String(v.city || '').trim() ||
       !!String(v.state || '').trim() ||
-      Number.isFinite(Number(v.lat)) ||
-      Number.isFinite(Number(v.lng))
+      isValidLatLng(lat, lng)
     return !hasAny
   })
 
-  const position = useMemo(() => {
-    const lat = Number(value?.lat)
-    const lng = Number(value?.lng)
-    if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng }
-    return { lat: -23.55052, lng: -46.633308 } // fallback: SP
-  }, [value?.lat, value?.lng])
-
   useEffect(() => {
-    setConfirmedLabel(value?.formatted || buildAddressLabel(value || {}))
+    latestValueRef.current = value
   }, [value])
 
   const cepDigits = useMemo(() => digitsOnly(value?.cep), [value?.cep])
 
   const shouldShowDetails = useMemo(() => {
     const v = value || {}
+    const lat = Number(v.lat)
+    const lng = Number(v.lng)
     const hasAnyDetails =
       !!String(v.street || '').trim() ||
       !!String(v.number || '').trim() ||
       !!String(v.neighborhood || '').trim() ||
       !!String(v.city || '').trim() ||
       !!String(v.state || '').trim() ||
-      Number.isFinite(Number(v.lat)) ||
-      Number.isFinite(Number(v.lng))
+      isValidLatLng(lat, lng)
 
     return cepDigits.length === 8 || hasAnyDetails
   }, [cepDigits.length, value])
 
-  const prevOpenRef = useRef(open)
-  const prevDetailsRef = useRef(shouldShowDetails)
-  useEffect(() => {
-    const wasOpen = prevOpenRef.current
-    const wasDetails = prevDetailsRef.current
-
-    // Reset loading state only when the map section becomes visible
-    // (not on every lat/lng change while user moves the map).
-    if ((!wasOpen && open) || (!wasDetails && shouldShowDetails)) {
-      setTilesOk(false)
-      setTileErr(false)
-    }
-
-    prevOpenRef.current = open
-    prevDetailsRef.current = shouldShowDetails
-  }, [open, shouldShowDetails])
-
-  useEffect(() => {
-    if (!open || !shouldShowDetails) return
-    if (tilesOk || tileErr) return
-
-    const t = setTimeout(() => {
-      // Se nada carregou em alguns segundos, tratamos como erro para não parecer "cinza quebrado".
-      setTileErr(true)
-    }, 8000)
-
-    return () => clearTimeout(t)
-  }, [open, shouldShowDetails, tilesOk, tileErr])
-
-  const mapPreviewLabel = useMemo(() => {
-    const raw = confirmedLabel || buildAddressLabel(value || {})
-    if (!raw) return ''
-    const idx = raw.lastIndexOf(' - ')
-    if (idx === -1) return raw
-    return `${raw.slice(0, idx)} • ${raw.slice(idx + 3)}`
-  }, [confirmedLabel, value])
-
   const canConfirm = useMemo(() => {
+    const street = String(value?.street || '').trim()
     const city = String(value?.city || '').trim()
     const uf = String(value?.state || '').trim().toUpperCase()
-    const lat = Number(value?.lat)
-    const lng = Number(value?.lng)
-    return !!city && uf.length === 2 && Number.isFinite(lat) && Number.isFinite(lng)
-  }, [value?.city, value?.state, value?.lat, value?.lng])
+    return !!street && !!city && uf.length === 2
+  }, [value?.street, value?.city, value?.state])
 
   const setField = (patch) => {
     onChange?.({
-      ...value,
+      ...(latestValueRef.current || {}),
       ...patch,
     })
   }
@@ -383,29 +275,56 @@ export default function ProfileAddressPicker({ value, onChange, toast }) {
 
       const lat = coords.latitude
       const lng = coords.longitude
+
+      const accuracy = Number(coords.accuracy)
+      if (Number.isFinite(accuracy) && accuracy > 200) {
+        toast?.({
+          title: 'Precisão baixa',
+          description: `Precisão aproximada de ${Math.round(accuracy)}m. Se puder, vá para uma área aberta e tente novamente.`,
+        })
+      }
+
+      if (!isValidLatLng(lat, lng)) {
+        throw new Error('Localização inválida.')
+      }
+
       setField({ lat, lng })
 
       try {
         const controller = new AbortController()
         const r = await reverseGeocodeNominatim({ lat, lng, signal: controller.signal })
-        setField({
-          street: r.street || value.street,
-          neighborhood: r.neighborhood || value.neighborhood,
-          city: r.city || value.city,
-          state: r.state || value.state,
-          cep: r.cep || value.cep,
-        })
+
+        const patch = {}
+        if (
+          r.street &&
+          !String(latestValueRef.current?.street || '').trim() &&
+          !(Number.isFinite(accuracy) && accuracy > 200)
+        ) {
+          patch.street = r.street
+        }
+        if (r.neighborhood) patch.neighborhood = r.neighborhood
+        if (r.city) patch.city = r.city
+        if (r.state) patch.state = r.state
+        if (r.cep) patch.cep = r.cep
+        if (Object.keys(patch).length) setField(patch)
       } catch {
         // ok: sem reverse geocode, mantemos só lat/lng
       }
     } catch (e) {
-      const msg = String(e?.message || e || '')
+      const code = Number(e?.code)
+
+      const description =
+        code === 1
+          ? 'Permita o acesso à localização para preencher automaticamente.'
+          : code === 2
+            ? 'Não foi possível obter sua localização. Verifique se o GPS/serviço de localização está ativado e tente novamente em uma área aberta.'
+            : code === 3
+              ? 'A solicitação de localização demorou demais. Tente novamente.'
+              : 'Não foi possível obter sua localização. Verifique se o GPS/serviço de localização está ativado e tente novamente.'
+
       toast?.({
         title: 'Não foi possível usar sua localização',
-        description:
-          msg.toLowerCase().includes('permission') || msg.toLowerCase().includes('denied')
-            ? 'Permita o acesso à localização para preencher automaticamente.'
-            : 'Tente novamente.',
+        description,
         variant: 'destructive',
       })
     } finally {
@@ -449,7 +368,7 @@ export default function ProfileAddressPicker({ value, onChange, toast }) {
     if (!canConfirm) {
       toast?.({
         title: 'Endereço incompleto',
-        description: 'Confirme apenas quando tiver Cidade, UF e o ponto no mapa.',
+        description: 'Confirme apenas quando tiver Rua, Cidade e UF.',
         variant: 'destructive',
       })
       return
@@ -458,7 +377,6 @@ export default function ProfileAddressPicker({ value, onChange, toast }) {
     const formatted = buildAddressLabel(value || {})
 
     setField({ formatted })
-    setConfirmedLabel(formatted)
     toast?.({
       title: 'Endereço confirmado',
       description: 'Agora é só salvar o perfil para concluir.',
@@ -479,7 +397,7 @@ export default function ProfileAddressPicker({ value, onChange, toast }) {
         <span className="flex min-w-0 items-center gap-2 text-muted-foreground">
           <MapPin className="h-4 w-4 shrink-0" />
           <span className="truncate">
-            {confirmedLabel || buildAddressLabel(value || {}) || 'Adicionar endereço'}
+            {buildAddressLabel(value || {}) || 'Adicionar endereço'}
           </span>
         </span>
 
@@ -554,7 +472,7 @@ export default function ProfileAddressPicker({ value, onChange, toast }) {
                 </div>
                 <div className="space-y-2 min-w-0">
                   <Label htmlFor="address_number">
-                    Número <span className="text-destructive">*</span>
+                    Número
                   </Label>
                   <Input
                     id="address_number"
@@ -625,70 +543,6 @@ export default function ProfileAddressPicker({ value, onChange, toast }) {
               <p className="text-xs text-muted-foreground">
                 Isso aparece no seu perfil e ajuda clientes perto de você.
               </p>
-
-              <div className="space-y-2">
-                <div className="rounded-xl border bg-background overflow-hidden">
-                  <div className="px-3 py-3 border-b">
-                    <p className="text-sm font-medium">Confirme o ponto exato</p>
-                    <p className="text-xs text-muted-foreground">Mova o mapa para ajustar o ponto</p>
-                  </div>
-
-                  <div className="relative h-[220px] w-full bg-muted/30">
-                    <MapContainer
-                      center={[position.lat, position.lng]}
-                      zoom={15}
-                      scrollWheelZoom={false}
-                      className="h-full w-full"
-                    >
-                      <InvalidateSizeOnMount />
-                      <InvalidateOnShow active={open && shouldShowDetails} />
-                      <RecenterOnPosition lat={position.lat} lng={position.lng} />
-
-                      <TileLayer
-                        url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
-                        attribution='&copy; OpenStreetMap contributors &copy; CARTO'
-                        eventHandlers={{
-                          load: () => setTilesOk(true),
-                          tileload: () => setTilesOk(true),
-                          tileerror: () => setTileErr(true),
-                        }}
-                      />
-
-                      <SyncCenterToValue
-                        onPick={({ lat, lng }) => {
-                          setField({ lat, lng })
-                        }}
-                      />
-                    </MapContainer>
-
-                    <div className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-full">
-                      <div className="grid place-items-center">
-                        <MapPin className="h-8 w-8 text-primary drop-shadow-sm" />
-                      </div>
-                    </div>
-
-                    {!tilesOk ? (
-                      <div className="absolute inset-0 grid place-items-center">
-                        <div className="absolute inset-0 bg-muted/40 animate-pulse" />
-                        <div className="relative rounded-md border bg-background/80 px-3 py-2 text-xs text-muted-foreground">
-                          {tileErr
-                            ? 'Não foi possível carregar o mapa. Verifique sua rede ou bloqueador.'
-                            : 'Carregando mapa…'}
-                        </div>
-                      </div>
-                    ) : null}
-                  </div>
-
-                  {mapPreviewLabel ? (
-                    <div className="px-3 py-3 text-sm text-muted-foreground border-t">
-                      <div className="flex items-center gap-2 rounded-md border bg-muted/40 px-3 py-2">
-                        <MapPin className="h-4 w-4 shrink-0" />
-                        <span className="truncate">{mapPreviewLabel}</span>
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-              </div>
 
               <Button
                 type="button"

@@ -1,5 +1,13 @@
-import heic2any from 'heic2any'
 import { createObjectUrlPreview, revokeObjectUrlIfNeeded } from '@/lib/filePreviewUrl'
+
+let heic2anyPromise = null
+
+export const getHeic2Any = async () => {
+  if (!heic2anyPromise) {
+    heic2anyPromise = import('heic2any').then((mod) => mod?.default || mod)
+  }
+  return heic2anyPromise
+}
 
 const HEIC_PREVIEW_SUPPORT_KEY = 'joby.heic_preview_supported'
 
@@ -19,6 +27,7 @@ export const isHeicLikeFile = (file) => {
 }
 
 export const convertHeicToJpegFile = async (file, { quality = 0.92 } = {}) => {
+  const heic2any = await getHeic2Any()
   const blobOrBlobs = await heic2any({
     blob: file,
     toType: 'image/jpeg',

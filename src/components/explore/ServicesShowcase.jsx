@@ -32,8 +32,33 @@ const buildPopularCategories = (services, { limit = 8 } = {}) => {
     .slice(0, limit)
 }
 
+const pickDistanceKm = (service) => {
+  const n = Number(service?.distance_km ?? service?.distanceKm ?? service?.distance)
+  return Number.isFinite(n) && n > 0 ? n : null
+}
+
 const ServicesShowcase = ({ services = [], onOpenService, onViewAll, maxNearby = 4, showViewAll = true }) => {
-  const nearby = (services || []).slice(0, Math.max(0, maxNearby))
+  const nearby = useMemo(() => {
+    const list = Array.isArray(services) ? services : []
+    const limit = Math.max(0, Number(maxNearby) || 0)
+    if (limit <= 0) return []
+
+    const decorated = list.map((s, idx) => ({ s, idx, km: pickDistanceKm(s) }))
+    const hasAnyDistance = decorated.some((x) => x.km != null)
+    if (!hasAnyDistance) return list.slice(0, limit)
+
+    const withKm = decorated
+      .filter((x) => x.km != null)
+      .sort((a, b) => (a.km || 0) - (b.km || 0) || a.idx - b.idx)
+      .map((x) => x.s)
+
+    const withoutKm = decorated
+      .filter((x) => x.km == null)
+      .sort((a, b) => a.idx - b.idx)
+      .map((x) => x.s)
+
+    return [...withKm, ...withoutKm].slice(0, limit)
+  }, [services, maxNearby])
 
   const popularCategories = useMemo(() => buildPopularCategories(services, { limit: 10 }), [services])
 

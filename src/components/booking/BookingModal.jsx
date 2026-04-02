@@ -277,6 +277,31 @@ const BookingModal = ({ isOpen, setIsOpen, professional }) => {
         if (paymentMethod) notesParts.push(`Pagamento: ${paymentMethod}`);
         const notes = notesParts.length ? notesParts.join('\n') : null;
 
+        const locationText = String(serviceLocation || '').trim()
+        if (!locationText) {
+          toast({
+            title: 'Campos obrigatórios',
+            description: 'Por favor, informe um local válido.',
+            variant: 'destructive',
+          })
+          return
+        }
+
+        const profileLocationText = String(clientUser?.location || '').trim()
+        const profileAddressFormatted = String(
+          clientUser?.address_formatted || clientUser?.addressFormatted || ''
+        ).trim()
+        const profileLat = Number(clientUser?.address_lat ?? clientUser?.addressLat)
+        const profileLng = Number(clientUser?.address_lng ?? clientUser?.addressLng)
+        const hasProfileCoords = Number.isFinite(profileLat) && Number.isFinite(profileLng)
+
+        // Só salva snapshot real quando o local do booking representa o endereço do perfil
+        // (evita gravar coords do perfil quando o usuário digitou outro local manualmente).
+        const shouldUseProfileSnapshot =
+          Boolean(profileAddressFormatted) &&
+          hasProfileCoords &&
+          (locationText === profileLocationText || locationText === profileAddressFormatted)
+
         const payload = {
           professional_id: professional.id,
           client_id: clientUser.id,
@@ -286,13 +311,22 @@ const BookingModal = ({ isOpen, setIsOpen, professional }) => {
           scheduled_time: selectedTime,
           duration: dateISO ? 1 : null,
           notes,
-          location: serviceLocation || null,
+          location: locationText,
+          service_address_formatted: shouldUseProfileSnapshot ? profileAddressFormatted : undefined,
+          service_lat: shouldUseProfileSnapshot ? profileLat : undefined,
+          service_lng: shouldUseProfileSnapshot ? profileLng : undefined,
         };
+
+        const payloadNoSnapshot = { ...payload }
+        delete payloadNoSnapshot.service_address_formatted
+        delete payloadNoSnapshot.service_lat
+        delete payloadNoSnapshot.service_lng
 
         const attempts = [
           { ...payload, total_price: total },
           payload,
-          { ...payload, total_price: total, location: undefined },
+          { ...payloadNoSnapshot, total_price: total },
+          payloadNoSnapshot,
         ];
 
         let inserted = null;

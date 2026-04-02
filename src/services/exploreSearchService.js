@@ -40,6 +40,12 @@ export async function searchProfiles(rawTerm, { limit = 12 } = {}) {
   const term = normalizeTerm(intent.term)
 
   const selectVariants = [
+    'id, username, avatar, profession, bio, location, rating, is_verified, address_lat, address_lng, created_at, experience_start_year, joby_since_year',
+    'id, username, avatar, profession, bio, location, rating, is_verified, address_lat, address_lng, created_at',
+    'id, username, avatar, profession, bio, location, rating, address_lat, address_lng, created_at',
+    'id, name, avatar, profession, bio, location, rating, is_verified, address_lat, address_lng, created_at, experience_start_year, joby_since_year',
+    'id, name, avatar, profession, bio, location, rating, is_verified, address_lat, address_lng, created_at',
+    'id, name, avatar, profession, bio, location, rating, address_lat, address_lng, created_at',
     'id, username, avatar, profession, bio, location, rating, is_verified, created_at, experience_start_year, joby_since_year',
     'id, username, avatar, profession, bio, location, rating, is_verified, created_at',
     'id, username, avatar, profession, bio, location, rating, created_at',
@@ -80,6 +86,10 @@ export async function searchServices(rawTerm, { limit = 12 } = {}) {
   const term = normalizeTerm(rawTerm)
 
   const selectVariants = [
+    `id, title, description, category, price, price_unit, image, is_active, created_at, user:user_id(id, username, name, avatar, profession, rating, location, address_lat, address_lng, can_offer_service, is_verified, created_at, experience_start_year, joby_since_year)` ,
+    `id, title, description, category, price, price_unit, image, is_active, created_at, user:user_id(id, username, name, avatar, profession, rating, location, address_lat, address_lng, can_offer_service, is_verified, created_at)` ,
+    `id, title, description, category, price, price_unit, image, is_active, created_at, user:user_id(id, username, avatar, profession, rating, location, address_lat, address_lng, can_offer_service, is_verified, created_at, experience_start_year, joby_since_year)` ,
+    `id, title, description, category, price, price_unit, image, is_active, created_at, user:user_id(id, username, avatar, profession, rating, location, address_lat, address_lng, can_offer_service, is_verified, created_at)` ,
     `id, title, description, category, price, price_unit, image, is_active, created_at, user:user_id(id, username, name, avatar, profession, rating, location, can_offer_service, is_verified, created_at, experience_start_year, joby_since_year)` ,
     `id, title, description, category, price, price_unit, image, is_active, created_at, user:user_id(id, username, name, avatar, profession, rating, location, can_offer_service, is_verified, created_at)` ,
     `id, title, description, category, price, price_unit, image, is_active, created_at, user:user_id(id, username, avatar, profession, rating, location, can_offer_service, is_verified, created_at, experience_start_year, joby_since_year)` ,

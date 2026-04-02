@@ -6,6 +6,28 @@ export const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
 export const supabaseKey =
   import.meta.env.VITE_SUPABASE_ANON_KEY || import.meta.env.VITE_SUPABASE_KEY
 
+export const getJobyPublicSiteUrl = () => {
+  const raw = String(import.meta.env?.VITE_PUBLIC_SITE_URL || '')
+    .trim()
+    .replace(/\/+$/, '')
+
+  if (raw) return raw
+
+  try {
+    return String(window.location.origin || '').trim().replace(/\/+$/, '')
+  } catch {
+    return ''
+  }
+}
+
+export const buildJobyPublicUrl = (path) => {
+  const base = getJobyPublicSiteUrl()
+  const p = String(path || '')
+  if (!base) return p
+  if (!p) return base
+  return `${base}${p.startsWith('/') ? p : `/${p}`}`
+}
+
 if (!supabaseUrl || !supabaseKey) {
   const message =
     'Configuração do Supabase ausente: defina VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY (ou VITE_SUPABASE_KEY) no .env'

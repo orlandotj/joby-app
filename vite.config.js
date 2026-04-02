@@ -315,9 +315,15 @@ export default defineConfig(({ command }) => {
 
 						const normalizedId = id.replace(/\\/g, '/')
 
-						if (normalizedId.includes('/node_modules/react-leaflet/')) return 'leaflet'
-						if (normalizedId.includes('/node_modules/leaflet/')) return 'leaflet'
-						if (normalizedId.includes('/node_modules/heic2any/')) return 'heic'
+						// Don't force a named chunk for Leaflet/React-Leaflet.
+						// In the current build, forcing it makes vendor import a shared CJS helper from the Leaflet chunk,
+						// which pulls Leaflet into the initial preload path.
+						if (normalizedId.includes('/node_modules/@react-leaflet/')) return
+						if (normalizedId.includes('/node_modules/react-leaflet/')) return
+						if (normalizedId.includes('/node_modules/leaflet/')) return
+						// Don't force a named chunk for heic2any. Let Rollup keep shared CJS/interop helpers
+						// in vendor, so the initial bundle doesn't depend on the HEIC chunk.
+						if (normalizedId.includes('/node_modules/heic2any/')) return
 
 						// Keep big deps out of the main entry chunk.
 						if (id.includes('@supabase/')) return 'supabase'

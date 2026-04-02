@@ -20,12 +20,14 @@ import ContentViewModal from '@/components/ContentViewModal'
 import { exploreSearch, inferSearchIntent } from '@/services/exploreSearchService'
 import { useToast } from '@/components/ui/use-toast'
 import { useLikes } from '@/contexts/LikesContext'
+import { useAuth } from '@/contexts/AuthContext'
 import { tabsPillList, tabsPillTrigger } from '@/design/tabTokens'
 import { cn } from '@/lib/utils'
 import { log } from '@/lib/logger'
 
 const Explore = () => {
   const { toast } = useToast()
+  const { user } = useAuth()
   const likes = useLikes()
   const likesRef = useRef(likes)
   const likesPrehydratedKeyRef = useRef('')
@@ -285,6 +287,55 @@ const Explore = () => {
 
   const intent = useMemo(() => inferSearchIntent(debouncedSearchTerm), [debouncedSearchTerm])
 
+  const roundKm = (km) => {
+    const n = Number(km)
+    if (!Number.isFinite(n) || n <= 0) return null
+    return n < 10 ? Math.round(n * 10) / 10 : Math.round(n)
+  }
+
+  const haversineKm = (lat1, lng1, lat2, lng2) => {
+    const a1 = Number(lat1)
+    const o1 = Number(lng1)
+    const a2 = Number(lat2)
+    const o2 = Number(lng2)
+    if (![a1, o1, a2, o2].every(Number.isFinite)) return null
+    const R = 6371
+    const toRad = (d) => (d * Math.PI) / 180
+    const dLat = toRad(a2 - a1)
+    const dLng = toRad(o2 - o1)
+    const s1 = Math.sin(dLat / 2)
+    const s2 = Math.sin(dLng / 2)
+    const h =
+      s1 * s1 +
+      Math.cos(toRad(a1)) * Math.cos(toRad(a2)) * (s2 * s2)
+    const c = 2 * Math.asin(Math.min(1, Math.sqrt(h)))
+    return roundKm(R * c)
+  }
+
+  const decorateExploreGeo = (res) => {
+    const originLat = user?.address_lat
+    const originLng = user?.address_lng
+
+    const nextServices = (res?.services || []).map((s) => {
+      const current = s || {}
+      const already = Number(current?.distance_km)
+      if (Number.isFinite(already) && already > 0) return current
+      const pro = current?.user || null
+      const km = haversineKm(originLat, originLng, pro?.address_lat, pro?.address_lng)
+      return km ? { ...current, distance_km: km } : current
+    })
+
+    const nextProfiles = (res?.profiles || []).map((p) => {
+      const current = p || {}
+      const already = Number(current?.distance_km)
+      if (Number.isFinite(already) && already > 0) return current
+      const km = haversineKm(originLat, originLng, current?.address_lat, current?.address_lng)
+      return km ? { ...current, distance_km: km } : current
+    })
+
+    return { nextProfiles, nextServices }
+  }
+
   const softRevalidate = useCallback(async () => {
     // Only revalidate when Explore is the active route (keep-alive keeps it mounted).
     const path = String(location?.pathname || '')
@@ -322,8 +373,9 @@ const Explore = () => {
       lastRevalidateAtRef.current = Date.now()
       lastSoftRevalidateNetworkErrorAtRef.current = 0
 
-      setProfiles(res.profiles || [])
-      setServices(res.services || [])
+      const { nextProfiles, nextServices } = decorateExploreGeo(res)
+      setProfiles(nextProfiles)
+      setServices(nextServices)
       setPublications(res.publications || [])
 
       const permissionErrors = [
@@ -447,8 +499,9 @@ const Explore = () => {
 
       if (isStale()) return
 
-      setProfiles(res.profiles || [])
-      setServices(res.services || [])
+      const { nextProfiles, nextServices } = decorateExploreGeo(res)
+      setProfiles(nextProfiles)
+      setServices(nextServices)
 
       // Pre-hydrate like counts (RPC) for publications before rendering.
       try {
@@ -563,8 +616,9 @@ const Explore = () => {
 
         if (seq !== requestSeq.current) return
 
-        setProfiles(res.profiles || [])
-        setServices(res.services || [])
+        const { nextProfiles, nextServices } = decorateExploreGeo(res)
+        setProfiles(nextProfiles)
+        setServices(nextServices)
         setPublications(res.publications || [])
 
         lastRevalidateAtRef.current = Date.now()

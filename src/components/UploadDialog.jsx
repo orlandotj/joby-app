@@ -16,7 +16,6 @@ import {
   UploadCloud,
   Inbox,
   Camera,
-  Image as ImageIcon,
   Video as VideoIcon,
   Loader2,
   FileCheck,
@@ -1767,34 +1766,76 @@ const UploadDialog = ({ isOpen, setIsOpen, uploadType, onUploadComplete }) => {
               <div className="grid gap-4 pt-4">
                 {!preview && (
                   uploadType === 'photo' ? (
-                    <div
-                      className="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-dashed border-muted-foreground/50 rounded-md cursor-pointer hover:border-primary transition-colors"
-                      onClick={() => fileInputRef.current?.click()}
-                    >
-                      <div className="space-y-1 text-center">
-                        <ImageIcon className="mx-auto h-12 w-12 text-muted-foreground" />
-                        <div className="flex text-sm text-muted-foreground">
-                          <Label
-                            htmlFor="file-upload"
-                            className="relative cursor-pointer rounded-md font-medium text-primary hover:text-primary/80 focus-within:outline-none focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2"
+                    <div className="mt-2 flex justify-center rounded-2xl border border-dashed border-border/70 bg-muted/10 px-4 py-8 transition-colors sm:px-6">
+                      <div className="w-full space-y-5">
+                        <div className="grid grid-cols-2 gap-4">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="min-h-36 w-full rounded-2xl border border-primary/20 bg-primary/5 shadow-sm hover:bg-primary/10 hover:shadow-md transition-all flex flex-col items-center justify-center gap-2 px-5 py-3 text-center"
+                            onClick={() => fileInputRef.current?.click()}
                           >
-                            <span>Clique para enviar</span>
-                          </Label>
-                          <p className="pl-1">ou arraste e solte</p>
+                            <span className="h-16 w-16 rounded-2xl border border-primary/25 bg-primary/12 flex items-center justify-center">
+                              <Inbox className="h-8 w-8 text-primary" />
+                            </span>
+                            <span className="text-center">
+                              <span className="flex min-h-8 items-center justify-center text-base font-semibold leading-tight text-foreground">
+                                Abrir arquivo
+                              </span>
+                              <span className="mt-1 flex min-h-8 items-start justify-center text-xs leading-snug text-muted-foreground">
+                                Galeria ou arquivos
+                              </span>
+                            </span>
+                          </Button>
+
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="min-h-36 w-full rounded-2xl border border-primary/20 bg-primary/5 shadow-sm hover:bg-primary/10 hover:shadow-md transition-all flex flex-col items-center justify-center gap-2 px-5 py-3 text-center"
+                            onClick={() => cameraInputRef.current?.click()}
+                          >
+                            <span className="h-16 w-16 rounded-2xl border border-primary/25 bg-primary/12 flex items-center justify-center">
+                              <Camera className="h-8 w-8 text-primary" />
+                            </span>
+                            <span className="text-center">
+                              <span className="flex min-h-8 items-center justify-center text-base font-semibold leading-tight text-foreground">
+                                Abrir câmera
+                              </span>
+                              <span className="mt-1 flex min-h-8 items-start justify-center text-xs leading-snug text-muted-foreground">
+                                Usar câmera do celular
+                              </span>
+                            </span>
+                          </Button>
                         </div>
-                        <p className="text-xs text-muted-foreground">
-                          Qualquer imagem até 30MB — otimiza/normaliza automático
-                        </p>
+
+                        <div className="flex justify-center pt-1">
+                          <span className="inline-flex items-center rounded-full border border-border/60 bg-background/60 px-2.5 py-0.5 text-[11px] text-muted-foreground">
+                            Imagem até 30MB — otimiza/normaliza automático
+                          </span>
+                        </div>
+
+                        <Input
+                          id="photo-file-upload"
+                          name="photo-file-upload"
+                          type="file"
+                          className="sr-only"
+                          ref={fileInputRef}
+                          onChange={handleFileChange}
+                          accept={getAcceptedFileTypes()}
+                          data-source="file"
+                        />
+                        <Input
+                          id="photo-camera-upload"
+                          name="photo-camera-upload"
+                          type="file"
+                          className="sr-only"
+                          ref={cameraInputRef}
+                          onChange={handleFileChange}
+                          accept="image/*"
+                          capture="environment"
+                          data-source="camera"
+                        />
                       </div>
-                      <Input
-                        id="file-upload"
-                        name="file-upload"
-                        type="file"
-                        className="sr-only"
-                        ref={fileInputRef}
-                        onChange={handleFileChange}
-                        accept={getAcceptedFileTypes()}
-                      />
                     </div>
                   ) : (
                     <div className="mt-2 flex justify-center rounded-2xl border border-dashed border-border/70 bg-muted/10 px-4 py-8 transition-colors sm:px-6">

@@ -18,6 +18,8 @@ const MainLayout = lazy(() => import('@/layouts/MainLayout'))
 // Páginas principais (lazy para reduzir o chunk principal)
 const Feed = lazy(() => import('@/pages/Feed'))
 const Login = lazy(() => import('@/pages/Login'))
+const AuthCallback = lazy(() => import('@/pages/AuthCallback'))
+const ResetPassword = lazy(() => import('@/pages/ResetPassword'))
 
 // Páginas com lazy loading
 const Profile = lazy(() => import('@/pages/Profile'))
@@ -35,6 +37,7 @@ const ProfileEdit = lazy(() => import('@/pages/ProfileEdit'))
 const Settings = lazy(() => import('@/pages/Settings'))
 const DebugSupabase = lazy(() => import('@/pages/DebugSupabase'))
 const DebugResume = lazy(() => import('@/pages/DebugResume'))
+const LeafletSmokeTest = lazy(() => import('@/pages/LeafletSmokeTest'))
 const TermsOfService = lazy(() => import('@/pages/TermsOfService'))
 const PrivacyPolicy = lazy(() => import('@/pages/PrivacyPolicy'))
 const ServiceConfirmation = lazy(() => import('@/pages/ServiceConfirmation'))
@@ -127,11 +130,16 @@ function App() {
                   <Routes>
                     <Route path="/login" element={<Login />} />
                     <Route path="/register" element={<Register />} />
+                    <Route path="/auth/callback" element={<AuthCallback />} />
+                    <Route path="/reset-password" element={<ResetPassword />} />
                     {import.meta.env.DEV ? (
                       <Route path="/debug-supabase" element={<DebugSupabase />} />
                     ) : null}
                     {import.meta.env.DEV ? (
                       <Route path="/debug-resume" element={<DebugResume />} />
+                    ) : null}
+                    {import.meta.env.DEV ? (
+                      <Route path="/debug-leaflet" element={<LeafletSmokeTest />} />
                     ) : null}
                     <Route path="/" element={<MainLayout />}>
                       <Route index element={<Feed />} />

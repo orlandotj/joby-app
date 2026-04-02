@@ -113,7 +113,9 @@ const MainLayout = () => {
           <div
             className={
               isFullWidth || isProfileEditRoute
-                ? 'joby-content-shell h-full flex flex-col overflow-hidden pt-12 pb-0 md:pt-8 md:pb-8 px-0 md:px-4'
+                ? `joby-content-shell h-full flex flex-col overflow-hidden ${
+                    useInFlowMobileHeader ? 'pt-0' : 'pt-12'
+                  } pb-0 md:pt-8 md:pb-8 px-0 md:px-4`
                 : `joby-content-shell min-h-screen container max-w-3xl mx-auto ${
                     // Home (/) uses a fixed header + fixed feed tabs bar.
                     // The Feed page already adds the correct dynamic paddingTop so

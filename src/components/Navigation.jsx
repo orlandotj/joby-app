@@ -39,9 +39,12 @@ const Navigation = () => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [keyboardVisible, setKeyboardVisible] = useState(false)
   const [overlayOpen, setOverlayOpen] = useState(false)
+  const [bottomNavVisible, setBottomNavVisible] = useState(true)
   const { showMobileHeader } = useMobileHeader()
   const mobileHeaderRef = useRef(null)
   const [uiReady, setUiReady] = useState(false)
+  const lastScrollYRef = useRef(0)
+  const scrollRafRef = useRef(0)
 
   useEffect(() => {
     let raf1 = 0
@@ -183,11 +186,80 @@ const Navigation = () => {
     return () => observer.disconnect()
   }, [])
 
+  const shouldHideBottomNavForChat = isMessagesRoute && showMobileHeader === false
+
   // Esconder navegação inferior quando:
   // - teclado está aberto na página de mensagens
   // - existe overlay full-screen aberto (ex.: comentários)
   const hideBottomNav =
-    (keyboardVisible && location.pathname === '/messages') || overlayOpen
+    (keyboardVisible && isMessagesRoute) || overlayOpen || shouldHideBottomNavForChat
+
+  // Hide/show bottom nav on scroll (mobile):
+  // - scroll down -> hide
+  // - scroll up -> show
+  // - near top -> keep visible
+  // Keep chat/messages behavior unchanged (disable scroll-hide there).
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    // Preserve chat/messages behavior: don't auto-hide on scroll there.
+    if (isMessagesRoute) {
+      setBottomNavVisible(true)
+      return
+    }
+
+    const TOP_Y_PX = 24
+    const DELTA_PX = 10
+
+    const readScrollY = (ev) => {
+      const t = ev?.target
+      if (t && t instanceof HTMLElement) {
+        const st = Number(t.scrollTop)
+        if (Number.isFinite(st)) return Math.max(0, st)
+      }
+
+      const doc = Number(document.scrollingElement?.scrollTop)
+      if (Number.isFinite(doc)) return Math.max(0, doc)
+
+      const win = Number(window.scrollY)
+      if (Number.isFinite(win)) return Math.max(0, win)
+
+      return 0
+    }
+
+    lastScrollYRef.current = readScrollY()
+    setBottomNavVisible(true)
+
+    const onScroll = (ev) => {
+      if (scrollRafRef.current) return
+
+      scrollRafRef.current = window.requestAnimationFrame(() => {
+        scrollRafRef.current = 0
+
+        const y = readScrollY(ev)
+        const prevY = lastScrollYRef.current
+        const delta = y - prevY
+        lastScrollYRef.current = y
+
+        if (y <= TOP_Y_PX) {
+          setBottomNavVisible(true)
+          return
+        }
+
+        if (Math.abs(delta) < DELTA_PX) return
+
+        const nextVisible = delta < 0
+        setBottomNavVisible((prev) => (prev === nextVisible ? prev : nextVisible))
+      })
+    }
+
+    window.addEventListener('scroll', onScroll, { passive: true, capture: true })
+    return () => {
+      window.removeEventListener('scroll', onScroll, { capture: true })
+      if (scrollRafRef.current) window.cancelAnimationFrame(scrollRafRef.current)
+      scrollRafRef.current = 0
+    }
+  }, [isMessagesRoute, location.pathname])
 
   const navItems = [
     { path: '/', icon: <Home size={20} />, label: 'Início' },
@@ -359,50 +431,88 @@ const Navigation = () => {
 
       {/* Mobile Navigation Bottom Bar */}
       {!hideBottomNav && (
-        <div className="joby-bottom-nav safeBottomNav md:hidden fixed bottom-0 left-0 right-0 bg-background border-t border-border z-50">
-          <nav className="flex justify-around items-center h-16">
-            {navItems.slice(0, 4).map(
-              (
-                item // Show first 4 items in bottom bar
-              ) => (
-                <NavLink
-                  key={item.path}
-                  to={
-                    item.path.includes(':jobId')
-                      ? item.path.replace(':jobId', 'sample-job-123')
-                      : item.path
-                  }
-                  onPointerDown={() => preloadPath(item.path)}
-                  className={() =>
-                    `flex flex-col items-center justify-center p-1 w-1/4 h-full ${
-                      isNavItemActive(item.path)
-                        ? 'text-primary'
-                        : 'text-muted-foreground'
-                    }`
-                  }
-                >
-                  <span className="relative inline-flex">
-                    {item.icon}
-                    {item.path === '/messages'
+        <div
+          className={`joby-bottom-nav safeBottomNav md:hidden fixed bottom-0 left-0 right-0 z-50 transform-gpu ${
+            uiReady ? 'transition-[transform,opacity] duration-300 ease-in-out' : ''
+          } ${
+            bottomNavVisible
+              ? 'translate-y-0 opacity-100 pointer-events-auto'
+              : 'translate-y-[120%] opacity-0 pointer-events-none'
+          }`}
+          style={{ willChange: 'transform, opacity' }}
+        >
+          <div className="mx-3 mb-2 rounded-2xl border border-border/70 bg-background/95 backdrop-blur-sm shadow-lg">
+            <nav className="flex items-center justify-between h-14 px-2">
+              {navItems.slice(0, 4).map(
+                (
+                  item // Show first 4 items in bottom bar
+                ) => {
+                  const isActive = isNavItemActive(item.path)
+                  const badge =
+                    item.path === '/messages'
                       ? renderBadge(unreadMessages)
                       : item.path === '/work-requests'
                       ? renderBadge(pendingWorkRequests)
-                      : null}
+                      : null
+
+                  return (
+                    <NavLink
+                      key={item.path}
+                      to={
+                        item.path.includes(':jobId')
+                          ? item.path.replace(':jobId', 'sample-job-123')
+                          : item.path
+                      }
+                      onPointerDown={() => preloadPath(item.path)}
+                      className={() =>
+                        `flex items-center justify-center p-1 flex-1 h-full ${
+                          isActive ? 'text-primary-foreground' : 'text-muted-foreground'
+                        }`
+                      }
+                    >
+                      {isActive ? (
+                        <span className="joby-gradient inline-flex w-full max-w-full min-w-0 items-center justify-center gap-2 rounded-full px-3 py-2 shadow-sm">
+                          <span className="relative inline-flex">
+                            {item.icon}
+                            {badge}
+                          </span>
+                          <span className="min-w-0 text-[0.7rem] font-semibold leading-none whitespace-nowrap truncate">
+                            {item.label}
+                          </span>
+                        </span>
+                      ) : (
+                        <span className="flex flex-col items-center justify-center gap-1">
+                          <span className="relative inline-flex">
+                            {item.icon}
+                            {badge}
+                          </span>
+                          <span className="text-[0.6rem] leading-none">{item.label}</span>
+                        </span>
+                      )}
+                    </NavLink>
+                  )
+                }
+              )}
+              <button
+                onClick={toggleMobileMenu}
+                className={`flex items-center justify-center p-1 flex-1 h-full ${
+                  mobileMenuOpen ? 'text-primary-foreground' : 'text-muted-foreground'
+                }`}
+              >
+                {mobileMenuOpen ? (
+                  <span className="joby-gradient inline-flex w-full max-w-full min-w-0 items-center justify-center gap-2 rounded-full px-3 py-2 shadow-sm">
+                    <Menu size={20} />
+                    <span className="min-w-0 text-[0.7rem] font-semibold leading-none whitespace-nowrap truncate">Menu</span>
                   </span>
-                  <span className="text-[0.6rem] mt-1">{item.label}</span>
-                </NavLink>
-              )
-            )}
-            <button
-              onClick={toggleMobileMenu}
-              className={`flex flex-col items-center justify-center p-1 w-1/4 h-full ${
-                mobileMenuOpen ? 'text-primary' : 'text-muted-foreground'
-              }`}
-            >
-              <Menu size={20} />
-              <span className="text-[0.6rem] mt-1">Menu</span>
-            </button>
-          </nav>
+                ) : (
+                  <span className="flex flex-col items-center justify-center gap-1">
+                    <Menu size={20} />
+                    <span className="text-[0.6rem] leading-none">Menu</span>
+                  </span>
+                )}
+              </button>
+            </nav>
+          </div>
         </div>
       )}
 

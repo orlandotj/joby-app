@@ -9,7 +9,7 @@ import { resizeImageClient } from '@/lib/imageResizeClient'
 import { log } from '@/lib/logger'
 import { createObjectUrlPreview, revokeObjectUrlIfNeeded } from '@/lib/filePreviewUrl'
 import { normalizeImage, NormalizeImageError } from '@/services/imageNormalizeService'
-import heic2any from 'heic2any'
+import { getHeic2Any } from '@/lib/heicClientConvert'
 
 const HEIC_PREVIEW_SUPPORT_KEY = 'joby.heic_preview_supported'
 
@@ -81,6 +81,7 @@ const isHeicLikeFile = (file) => {
 }
 
 const convertHeicToJpegFile = async (file) => {
+  const heic2any = await getHeic2Any()
   const blobOrBlobs = await heic2any({
     blob: file,
     toType: 'image/jpeg',

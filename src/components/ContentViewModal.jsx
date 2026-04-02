@@ -52,6 +52,7 @@ import { Link } from 'react-router-dom'
 import { CommentsSheet } from '@/components/comments/CommentsSheet'
 import { attemptPlayWithMuteFallback } from '@/lib/videoAudioPrefs'
 import { ensureUserPlaybackUnlockedOnFirstGesture } from '@/lib/videoPlaybackCoordinator'
+import { shareContent } from '@/lib/shareContent'
 import {
   hasSessionViewedVideo,
   hasSessionViewedPhoto,
@@ -822,12 +823,42 @@ const ContentViewModal = ({
     }
   }, [])
 
-  const handleShare = () => {
-    navigator.clipboard.writeText(window.location.href)
-    toast({
-      title: 'Link copiado!',
-      description: 'O link foi copiado para sua área de transferência.',
-    })
+  const handleShare = async () => {
+    const url = (() => {
+      try {
+        return String(window.location.href || '').trim()
+      } catch {
+        return ''
+      }
+    })()
+
+    const rawTitle = isVideo ? content?.title : content?.caption
+    const title = String(rawTitle || '').trim()
+    const text = title ? '' : isVideo ? 'Vídeo no JOBY' : 'Foto no JOBY'
+
+    try {
+      const res = await shareContent({ title, text, url })
+
+      if (res?.method === 'clipboard') {
+        toast({
+          title: 'Link copiado!',
+          description: 'O link foi copiado para sua área de transferência.',
+        })
+      }
+
+      if (res?.method === 'prompt') {
+        toast({
+          title: 'Copie o link',
+          description: 'Use o link exibido para copiar manualmente.',
+        })
+      }
+    } catch {
+      toast({
+        title: 'Falha ao compartilhar',
+        description: 'Não foi possível compartilhar este conteúdo no momento.',
+        variant: 'destructive',
+      })
+    }
   }
 
   if (!content) return null

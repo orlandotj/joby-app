@@ -47,6 +47,7 @@ import { hasSessionViewedVideo, incrementVideoView, markSessionViewedVideo } fro
 import { asInt, formatCompactNumber } from '@/lib/numberFormat'
 import { attemptPlayWithMuteFallback, getInitialMuted } from '@/lib/videoAudioPrefs'
 import { log } from '@/lib/logger'
+import { shareContent } from '@/lib/shareContent'
 import {
   clearActiveVideoKey,
   ensureUserPlaybackUnlockedOnFirstGesture,
@@ -500,25 +501,31 @@ const VideoCard = ({ video, user, onLikeChange, isFirst = false }) => {
 
     const url = new URL(`/video/${id}`, window.location.origin).toString()
 
+    const title = String(video?.title || '').trim()
+    const text = title ? '' : 'Vídeo no JOBY'
+
     try {
-      if (!navigator?.clipboard?.writeText) {
-        throw new Error('Clipboard API indisponível')
+      const res = await shareContent({ title, text, url })
+
+      if (res?.method === 'clipboard') {
+        toast({
+          title: 'Link copiado!',
+          description: 'O link do vídeo foi copiado para sua área de transferência.',
+        })
       }
-      await navigator.clipboard.writeText(url)
-      toast({
-        title: 'Link copiado!',
-        description: 'O link do vídeo foi copiado para sua área de transferência.',
-      })
-    } catch (error) {
-      // Fallback: exibe o link para cópia manual
-      try {
-        window.prompt('Copie o link do vídeo:', url)
-      } catch {
-        // ignore
+
+      if (res?.method === 'prompt') {
+        toast({
+          title: 'Copie o link',
+          description:
+            'Não foi possível copiar automaticamente. Use o link exibido para copiar manualmente.',
+        })
       }
+    } catch {
       toast({
-        title: 'Copie o link',
-        description: 'Não foi possível copiar automaticamente. Use o link exibido para copiar manualmente.',
+        title: 'Falha ao compartilhar',
+        description: 'Não foi possível compartilhar este conteúdo no momento.',
+        variant: 'destructive',
       })
     }
   }

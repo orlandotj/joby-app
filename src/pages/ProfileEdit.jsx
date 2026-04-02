@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { Camera, Upload, X, Plus, Edit2, Trash2, Briefcase, MapPin } from 'lucide-react'
@@ -459,6 +459,8 @@ const ProfileEdit = () => {
     formatted: '',
   })
 
+  const addressDirtyRef = useRef(false)
+
   const [personal, setPersonal] = useState({
     username: '',
     fullName: '',
@@ -528,19 +530,23 @@ const ProfileEdit = () => {
       })
 
       // Endereço (se as colunas existirem no schema)
-      setAddress((prev) => ({
-        ...prev,
-        cep: maskCep(user.address_cep || ''),
-        street: user.address_street || '',
-        number: user.address_number || '',
-        complement: user.address_complement || '',
-        neighborhood: user.address_neighborhood || '',
-        city: user.address_city || '',
-        state: user.address_state || '',
-        lat: user.address_lat ?? null,
-        lng: user.address_lng ?? null,
-        formatted: user.address_formatted || '',
-      }))
+      setAddress((prev) => {
+        if (addressDirtyRef.current) return prev
+
+        return {
+          ...prev,
+          cep: maskCep(user.address_cep || ''),
+          street: user.address_street || '',
+          number: user.address_number || '',
+          complement: user.address_complement || '',
+          neighborhood: user.address_neighborhood || '',
+          city: user.address_city || '',
+          state: user.address_state || '',
+          lat: user.address_lat ?? null,
+          lng: user.address_lng ?? null,
+          formatted: user.address_formatted || '',
+        }
+      })
 
       setAvatarPreview(user.avatar)
       setCoverPreview(user.coverImage || user.cover_image || null)
@@ -1148,6 +1154,8 @@ const ProfileEdit = () => {
 
       if (updateError) throw updateError
 
+      addressDirtyRef.current = false
+
       // Update local user state
       await updateUser({
         bio: formData.bio,
@@ -1341,7 +1349,10 @@ const ProfileEdit = () => {
             <Label>Endereço</Label>
             <ProfileAddressPicker
               value={address}
-              onChange={setAddress}
+              onChange={(next) => {
+                addressDirtyRef.current = true
+                setAddress(next)
+              }}
               toast={toast}
             />
           </div>
